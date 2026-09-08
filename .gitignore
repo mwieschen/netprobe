@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+
+# Datenbanken / Laufzeitdaten (nie committen)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.pcapng
+*.pcap
+
+# Secrets / lokale Konfiguration
+.env
+netprobe.env
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

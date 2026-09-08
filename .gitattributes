@@ -1,0 +1,7 @@
+# Zeilenenden normalisieren. Shell-Skripte MÜSSEN LF behalten (Linux-Ziel).
+* text=auto eol=lf
+*.sh text eol=lf
+install.sh text eol=lf
+*.png binary
+*.jpg binary
+*.gz binary

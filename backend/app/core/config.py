@@ -1,0 +1,99 @@
+"""Zentrale, typsichere Konfiguration über Pydantic Settings.
+
+Alle Werte sind über Umgebungsvariablen (Präfix ``NETPROBE_``) bzw. die Datei
+``/etc/netprobe/netprobe.env`` konfigurierbar.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Standard-Pfad der Env-Datei; kann via NETPROBE_ENV_FILE überschrieben werden.
+_ENV_FILE = Path("/etc/netprobe/netprobe.env")
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="NETPROBE_",
+        env_file=str(_ENV_FILE) if _ENV_FILE.exists() else None,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # --- Allgemein ---
+    app_name: str = "netprobe"
+    environment: str = "production"
+    timezone: str = "Europe/Berlin"
+
+    # Geheimschlüssel für Cookie-Signierung. MUSS in Produktion gesetzt werden.
+    secret_key: str = Field(default="change-me-in-production")
+
+    # --- Netzwerk / HTTP ---
+    host: str = "127.0.0.1"
+    port: int = 8000
+    # true, wenn hinter HTTPS-Reverse-Proxy -> Secure-Cookie
+    https_enabled: bool = False
+    # Erlaubte Origins für CORS (leer = keine Cross-Origin-Requests)
+    cors_origins: str = ""
+
+    # --- Pfade ---
+    data_dir: Path = Path("/var/lib/netprobe")
+    capture_dir: Path = Path("/var/lib/netprobe/captures")
+    log_dir: Path = Path("/var/log/netprobe")
+    frontend_dist: Path = Path("/opt/netprobe/frontend/dist")
+
+    # --- Datenbank ---
+    database_url: str = "sqlite:////var/lib/netprobe/db.sqlite"
+
+    # --- Externe Tools ---
+    speedtest_bin: str = "speedtest"
+    fping_bin: str = "fping"
+    ping_bin: str = "ping"
+    dumpcap_bin: str = "dumpcap"
+    tshark_bin: str = "tshark"
+
+    # --- Speedtest ---
+    speedtest_interval_min: int = 60
+    speedtest_server_id: int | None = None
+    speedtest_enabled: bool = True
+
+    # --- Capture-Limits ---
+    capture_default_duration_s: int = 60
+    capture_max_duration_s: int = 900  # 15 Minuten
+    capture_default_size_mb: int = 100
+    capture_max_size_mb: int = 500
+    capture_retention_days: int = 14
+
+    # --- Retention ---
+    ping_raw_retention_days: int = 14
+    ping_agg_retention_days: int = 365
+    result_retention_days: int = 365
+
+    # --- Analyse-Limits ---
+    tshark_timeout_s: int = 120
+    display_filter_max_packets: int = 1000
+
+    # --- Login / Rate Limiting ---
+    login_rate_max_attempts: int = 5
+    login_rate_window_s: int = 300
+    session_max_age_s: int = 60 * 60 * 12  # 12 Stunden
+
+    # --- Erst-Admin (nur beim allerersten Start ausgewertet) ---
+    admin_user: str | None = None
+    admin_password: str | None = None
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

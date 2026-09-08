@@ -1,0 +1,38 @@
+[Unit]
+Description=netprobe – Netzwerk- und WAN-Monitoring (API + Worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netprobe
+Group=netprobe
+# Konfiguration ausschließlich über diese Datei:
+EnvironmentFile=/etc/netprobe/netprobe.env
+WorkingDirectory=/opt/netprobe/backend
+ExecStart=/opt/netprobe/venv/bin/gunicorn \
+    app.main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers 1 \
+    --bind 127.0.0.1:8000 \
+    --timeout 300 \
+    --access-logfile - \
+    --error-logfile -
+Restart=on-failure
+RestartSec=5
+
+# --- Härtung ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/netprobe /var/log/netprobe
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# dumpcap benötigt CAP_NET_RAW/CAP_NET_ADMIN; dies wird über die dumpcap-Binary
+# (setcap) bzw. die Gruppe 'wireshark' realisiert, NICHT über den Dienst selbst.
+
+[Install]
+WantedBy=multi-user.target
