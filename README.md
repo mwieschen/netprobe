@@ -6,8 +6,9 @@ die im LAN über einen Browser administriert wird. Sie misst Internet-Durchsatz
 durch und ermöglicht sichere Packet Captures mit Basisanalyse – alles lokal,
 **ohne Cloud-Dienste und ohne Telemetrie**.
 
-> Zielplattform: **Ubuntu Server 22.04 / 24.04**. Backend: FastAPI + SQLAlchemy.
-> Frontend: React + TypeScript + Vite + ECharts. Zeitzone: intern UTC, Anzeige Europe/Berlin.
+> Zielplattform: **Ubuntu Server 22.04 / 24.04 / 26.04**. Backend: FastAPI + SQLAlchemy
+> (Python 3.12–3.14). Frontend: React 19 + TypeScript + Vite 7 + ECharts, gebaut mit
+> Node.js ≥ 20 (LTS 24 empfohlen). Zeitzone: intern UTC, Anzeige Europe/Berlin.
 
 ---
 
@@ -60,6 +61,22 @@ API-Dokumentation: http://<server-ip>/api/docs
 Der Installer ist **idempotent** – ein erneuter Aufruf aktualisiert die Anwendung,
 ohne Datenbank oder Konfiguration zu zerstören.
 
+### Ubuntu-26.04-Besonderheiten
+
+Der Installer erkennt **22.04, 24.04 und 26.04** automatisch. Für 26.04 gilt:
+
+- **Python 3.14**: Das Backend läuft mit 3.12–3.14. Alle Abhängigkeiten bringen
+  vorgebaute Wheels für 3.14 mit; falls nicht, baut pip aus dem Quellcode
+  (`build-essential` + `python3-dev` werden installiert). Der systemd-Dienst startet
+  aus einem venv und ist damit unabhängig von der konkreten Python-Version.
+- **Node.js 24**: wird bevorzugt von NodeSource installiert; schlägt das auf einem noch
+  nicht unterstützten Codename fehl, greift automatisch das Ubuntu-eigene Node-Paket
+  (≥ 20 genügt für den Vite-7-Build).
+- **Ookla Speedtest CLI**: Das packagecloud-Repo führt 26.04 evtl. noch nicht. Der
+  Installer nutzt daher den **24.04-Fallback-Codename (`noble`)** und – falls auch das
+  fehlschlägt – lädt automatisch das **offizielle Ookla-Tarball** und legt die Binary
+  nach `/usr/local/bin/speedtest`. Siehe unten „Speedtest CLI manuell".
+
 ---
 
 ## Manuelle Installation der Systemabhängigkeiten
@@ -76,14 +93,45 @@ sudo apt-get install -y python3 python3-venv python3-dev build-essential \
 curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo bash -
 sudo apt-get install -y nodejs
 
+# Node.js 24 (LTS)
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo bash -
+sudo apt-get install -y nodejs
+
 # Offizielle Ookla Speedtest CLI (NICHT das Python-Paket speedtest-cli)
-curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash -
+# Auf 26.04 den 24.04-Codename erzwingen, solange 26.04 nicht geführt wird:
+curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh \
+    | sudo os=ubuntu dist=noble bash -
 sudo apt-get install -y speedtest
+```
+
+### Speedtest CLI manuell (Tarball-Fallback)
+
+Falls das APT-Repository die Speedtest CLI nicht bereitstellt (typisch auf sehr neuen
+Ubuntu-Versionen), das **offizielle Tarball** von Ookla installieren:
+
+```bash
+# Architektur ggf. anpassen: x86_64 | aarch64 | armhf | i386
+curl -fsSL https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz -o /tmp/st.tgz
+tar -xzf /tmp/st.tgz -C /tmp
+sudo install -m 0755 /tmp/speedtest /usr/local/bin/speedtest
+speedtest --accept-license --accept-gdpr --version
 ```
 
 > **Hinweis:** Ist eine Systemabhängigkeit nicht verfügbar, liefert netprobe eine
 > verständliche Fehlermeldung (z. B. „Benötigtes Programm 'speedtest' wurde nicht
 > gefunden“). Das Dashboard zeigt unter *Werkzeuge*, welche Programme vorhanden sind.
+
+---
+
+## Bekannte Issues & Workarounds (Ubuntu 26.04)
+
+| Problem | Ursache | Workaround |
+|---------|---------|------------|
+| `speedtest`-Paket nicht gefunden | Ookla-Repo führt 26.04 noch nicht | Installer nutzt automatisch `noble`-Fallback + Tarball; manuell siehe „Speedtest CLI manuell" |
+| NodeSource-Setup schlägt fehl | Codename in NodeSource unbekannt | Installer fällt auf Ubuntu-Node-Paket zurück; alternativ `sudo apt-get install -y nodejs npm` |
+| `pip`/Wheel-Build für Python 3.14 langsam | Noch keine vorgebauten Wheels | `build-essential` + `python3-dev` sind installiert; Build aus Quellcode läuft automatisch |
+| `pip install ../README.md`-Fehler bei eigenem Build | Neuere setuptools verbieten Pfade außerhalb des Pakets | Bereits behoben – `backend/pyproject.toml` referenziert keine externe README mehr |
+| `dumpcap: Permission denied` | Capabilities/Gruppe fehlen | `sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/dumpcap` und `netprobe` in Gruppe `wireshark` |
 
 ---
 

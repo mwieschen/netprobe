@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# netprobe Installationsscript für Ubuntu Server 22.04 / 24.04.
+# netprobe Installationsscript für Ubuntu Server 22.04 / 24.04 / 26.04.
 # Idempotent: erneuter Aufruf zerstört weder Datenbank noch Konfiguration.
 #
 set -euo pipefail
@@ -27,6 +27,42 @@ die()  { echo -e "${C_ERR}[ fehler ]${C_RST} $*" >&2; exit 1; }
 
 export DEBIAN_FRONTEND=noninteractive
 
+# Wird in detect_os() gesetzt: Codename für Drittanbieter-Repos (Ookla, NodeSource).
+# Für sehr neue Ubuntu-Versionen, die dort noch nicht geführt werden, wird auf die
+# jeweils letzte unterstützte LTS zurückgefallen.
+UBUNTU_VERSION_ID=""
+UBUNTU_CODENAME=""
+REPO_CODENAME=""
+
+# ---------------------------------------------------------------------------
+# 0. Betriebssystem erkennen und Repo-Codename bestimmen
+# ---------------------------------------------------------------------------
+detect_os() {
+    if [ ! -r /etc/os-release ]; then die "Kann /etc/os-release nicht lesen."; fi
+    . /etc/os-release
+    if [ "${ID:-}" != "ubuntu" ]; then die "Nur Ubuntu wird unterstützt (gefunden: ${ID:-unbekannt})."; fi
+    UBUNTU_VERSION_ID="${VERSION_ID:-}"
+    UBUNTU_CODENAME="${VERSION_CODENAME:-}"
+
+    case "$UBUNTU_VERSION_ID" in
+        22.04)
+            REPO_CODENAME="${UBUNTU_CODENAME:-jammy}"
+            ok "Ubuntu ${UBUNTU_VERSION_ID} (${REPO_CODENAME}) erkannt." ;;
+        24.04)
+            REPO_CODENAME="${UBUNTU_CODENAME:-noble}"
+            ok "Ubuntu ${UBUNTU_VERSION_ID} (${REPO_CODENAME}) erkannt." ;;
+        26.04)
+            # 26.04 wird von Ookla/NodeSource ggf. noch nicht geführt -> 24.04 LTS als Repo-Fallback.
+            REPO_CODENAME="noble"
+            ok "Ubuntu ${UBUNTU_VERSION_ID} (${UBUNTU_CODENAME:-unbekannt}) erkannt."
+            warn "Für Drittanbieter-Repos wird der 24.04-Fallback ('${REPO_CODENAME}') verwendet, falls 26.04 dort fehlt." ;;
+        *)
+            REPO_CODENAME="noble"
+            warn "Ubuntu ${UBUNTU_VERSION_ID:-?} ist ungetestet (unterstützt: 22.04, 24.04, 26.04)."
+            warn "Nutze Repo-Fallback '${REPO_CODENAME}'; die Installation wird dennoch versucht." ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 # 1. Vorbedingungen prüfen
 # ---------------------------------------------------------------------------
@@ -34,14 +70,7 @@ check_prereqs() {
     log "Prüfe Vorbedingungen…"
 
     [ "$(id -u)" -eq 0 ] || die "Bitte als root ausführen (sudo ./install.sh)."
-
-    if [ ! -r /etc/os-release ]; then die "Kann /etc/os-release nicht lesen."; fi
-    . /etc/os-release
-    if [ "${ID:-}" != "ubuntu" ]; then die "Nur Ubuntu wird unterstützt (gefunden: ${ID:-unbekannt})."; fi
-    case "${VERSION_ID:-}" in
-        22.04|24.04) ok "Ubuntu ${VERSION_ID} erkannt." ;;
-        *) warn "Ubuntu ${VERSION_ID:-?} ist nicht offiziell getestet (unterstützt: 22.04, 24.04)." ;;
-    esac
+    detect_os
 
     log "Prüfe Internetverbindung…"
     if ! curl -fsS --max-time 10 https://deb.debian.org >/dev/null 2>&1 && \
@@ -86,24 +115,65 @@ install_packages() {
         sqlite3 \
         tshark wireshark-common \
         fping iputils-ping mtr-tiny \
-        curl jq ca-certificates gnupg lsb-release ssl-cert
+        curl jq tar ca-certificates gnupg lsb-release ssl-cert
 
     ok "Systempakete installiert."
-
+    ensure_python
     install_nodejs
     install_speedtest
 }
 
+# Stellt sicher, dass Python + venv nutzbar sind (auch mit Python 3.14 auf 26.04).
+# Der Dienst läuft später aus einem venv, daher genügt der Standard-python3.
+ensure_python() {
+    local pyver
+    pyver="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")"
+    log "System-Python: ${pyver}"
+    # venv-Funktionsfähigkeit prüfen; bei Bedarf versioniertes Paket nachinstallieren
+    if ! python3 -m venv --help >/dev/null 2>&1; then
+        warn "python3-venv scheint unvollständig; versuche python${pyver}-venv…"
+        apt-get install -y -qq "python${pyver}-venv" "python${pyver}-dev" 2>/dev/null || true
+    fi
+    if ! python3 -m venv --help >/dev/null 2>&1; then
+        die "Python-venv ist nicht verfügbar. Bitte 'python3-venv' manuell installieren."
+    fi
+    # Python 3.12+ ist Voraussetzung (Backend nutzt 3.12-Syntax; 3.14 wird unterstützt).
+    if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3,12) else 1)'; then
+        die "Python ${pyver} ist zu alt. Benötigt wird mindestens Python 3.12."
+    fi
+    ok "Python ${pyver} mit venv verfügbar."
+}
+
+_node_major() { command -v node >/dev/null 2>&1 && node -v | sed 's/v\([0-9]*\).*/\1/' || echo 0; }
+
 install_nodejs() {
-    if command -v node >/dev/null 2>&1 && [ "$(node -v | sed 's/v\([0-9]*\).*/\1/')" -ge 18 ]; then
+    if [ "$(_node_major)" -ge 20 ]; then
         ok "Node.js $(node -v) bereits vorhanden."
         return
     fi
-    log "Installiere Node.js LTS…"
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - >/dev/null 2>&1
-    apt-get install -y -qq nodejs
-    ok "Node.js $(node -v) installiert."
+
+    # 1) Bevorzugt Node.js 24 von NodeSource. Das Setup-Skript erkennt den Codename
+    #    selbst; auf sehr neuen Ubuntu-Versionen kann das fehlschlagen -> Fallback.
+    log "Installiere Node.js 24 (NodeSource)…"
+    if curl -fsSL https://deb.nodesource.com/setup_24.x | bash - >/dev/null 2>&1; then
+        apt-get install -y -qq nodejs || true
+    fi
+
+    # 2) Fallback: Node.js aus den Ubuntu-Paketquellen (auf 26.04 aktuell genug).
+    if [ "$(_node_major)" -lt 20 ]; then
+        warn "NodeSource fehlgeschlagen oder Version zu alt; nutze Ubuntu-Paketquellen…"
+        apt-get install -y -qq nodejs npm || true
+    fi
+
+    if [ "$(_node_major)" -ge 20 ]; then
+        ok "Node.js $(node -v) installiert."
+    else
+        die "Node.js (>=20) konnte nicht installiert werden. Bitte manuell installieren (siehe README)."
+    fi
 }
+
+# Version der offiziellen Ookla Speedtest CLI für den Tarball-Fallback.
+OOKLA_CLI_VERSION="1.2.0"
 
 install_speedtest() {
     if command -v speedtest >/dev/null 2>&1; then
@@ -111,9 +181,51 @@ install_speedtest() {
         return
     fi
     log "Installiere offizielle Ookla Speedtest CLI…"
-    curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash - >/dev/null 2>&1
-    apt-get install -y -qq speedtest || warn "Speedtest CLI konnte nicht installiert werden (siehe README für manuelle Installation)."
-    command -v speedtest >/dev/null 2>&1 && ok "Speedtest CLI installiert." || true
+
+    # 1) APT-Repository (packagecloud). Der Codename wird auf REPO_CODENAME
+    #    gesetzt, damit auf 26.04 der 24.04-Fallback ('noble') genutzt wird,
+    #    solange Ookla 26.04 nicht führt. Das Skript honoriert os/dist.
+    if curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh \
+        | os=ubuntu dist="${REPO_CODENAME}" bash - >/dev/null 2>&1; then
+        apt-get install -y -qq speedtest >/dev/null 2>&1 || true
+    fi
+
+    # 2) Fallback: offizielles Tarball direkt von Ookla installieren.
+    if ! command -v speedtest >/dev/null 2>&1; then
+        warn "APT-Installation der Speedtest CLI fehlgeschlagen; versuche offizielles Tarball…"
+        install_speedtest_tarball || true
+    fi
+
+    if command -v speedtest >/dev/null 2>&1; then
+        ok "Speedtest CLI installiert ($(speedtest --version 2>/dev/null | head -n1 || echo ok))."
+    else
+        warn "Speedtest CLI konnte NICHT installiert werden. Speedtests bleiben deaktiviert,"
+        warn "bis die CLI vorhanden ist (siehe README, Abschnitt 'Speedtest CLI manuell')."
+    fi
+}
+
+# Lädt das offizielle Ookla-Tarball und legt die Binary nach /usr/local/bin.
+install_speedtest_tarball() {
+    local arch url tmp
+    case "$(uname -m)" in
+        x86_64)        arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        armv7l|armhf)  arch="armhf" ;;
+        i386|i686)     arch="i386" ;;
+        *) warn "Speedtest-Tarball: Architektur $(uname -m) nicht unterstützt."; return 1 ;;
+    esac
+    url="https://install.speedtest.net/app/cli/ookla-speedtest-${OOKLA_CLI_VERSION}-linux-${arch}.tgz"
+    tmp="$(mktemp -d)"
+    if curl -fsSL "$url" -o "$tmp/speedtest.tgz"; then
+        if tar -xzf "$tmp/speedtest.tgz" -C "$tmp" 2>/dev/null && [ -f "$tmp/speedtest" ]; then
+            install -m 0755 "$tmp/speedtest" /usr/local/bin/speedtest
+            rm -rf "$tmp"
+            return 0
+        fi
+    fi
+    warn "Tarball-Download/-Entpacken fehlgeschlagen: $url"
+    rm -rf "$tmp"
+    return 1
 }
 
 # ---------------------------------------------------------------------------

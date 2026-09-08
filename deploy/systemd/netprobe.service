@@ -10,6 +10,9 @@ Group=netprobe
 # Konfiguration ausschließlich über diese Datei:
 EnvironmentFile=/etc/netprobe/netprobe.env
 WorkingDirectory=/opt/netprobe/backend
+# gunicorn wird aus dem venv gestartet. Das venv wird beim Setup mit dem System-
+# Python (Ubuntu 22.04/24.04: 3.12, 26.04: 3.14) erzeugt; der Interpreterpfad ist
+# hier bewusst NICHT hartkodiert, damit ein Upgrade der Python-Version nichts bricht.
 ExecStart=/opt/netprobe/venv/bin/gunicorn \
     app.main:app \
     --worker-class uvicorn.workers.UvicornWorker \
