@@ -101,3 +101,35 @@ def test_parse_ping_output():
 def test_parse_ping_single():
     assert parse_ping_single("64 bytes from x: icmp_seq=1 ttl=59 time=9.4 ms") == 9.4
     assert parse_ping_single("Request timeout") is None
+
+
+def test_wan_args_use_separator_and_reject_dash():
+    """Härtung gegen Argument-Injection: '--' trennt Optionen von Operanden,
+    ein mit '-' beginnender Host wird abgelehnt."""
+    import pytest
+
+    from app.services import wan_service
+
+    fping = wan_service.build_fping_args("1.1.1.1", 5, 1000)
+    assert "--" in fping and fping[-1] == "1.1.1.1"
+    assert fping.index("--") < fping.index("1.1.1.1")
+
+    ping = wan_service.build_ping_args("8.8.8.8", 5, 1000)
+    assert "--" in ping and ping[-1] == "8.8.8.8"
+
+    for bad in ("-oL/etc/passwd", "--flag"):
+        with pytest.raises(ValueError):
+            wan_service.build_fping_args(bad, 5, 1000)
+        with pytest.raises(ValueError):
+            wan_service.build_ping_args(bad, 5, 1000)
+
+
+def test_ping_manager_rejects_dash_host():
+    import pytest
+
+    from app.services.ping_manager import _build_single_ping_args
+
+    args = _build_single_ping_args("192.168.1.1")
+    assert "--" in args and args[-1] == "192.168.1.1"
+    with pytest.raises(ValueError):
+        _build_single_ping_args("-eval")

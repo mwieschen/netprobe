@@ -43,8 +43,10 @@ def login(
     db: Session = Depends(get_db),
 ) -> User:
     ip = client_ip(request)
-    rate_key = f"{ip}:{payload.username}"
-    if not login_rate_limiter.check(rate_key):
+    # Zwei Rate-Limit-Schlüssel: pro (IP+Benutzer) und pro Benutzer allein. Letzterer
+    # greift auch dann, wenn die IP-Herkunft (z. B. via Header-Spoofing) manipuliert wird.
+    rate_keys = [f"ip:{ip}:{payload.username}", f"user:{payload.username}"]
+    if any(not login_rate_limiter.check(k) for k in rate_keys):
         audit.record(db, "login_rate_limited", username=payload.username, ip=ip)
         db.commit()
         raise HTTPException(
@@ -54,7 +56,8 @@ def login(
 
     user = db.query(User).filter(User.username == payload.username).first()
     if user is None or not user.is_active or not verify_password(user.password_hash, payload.password):
-        login_rate_limiter.hit(rate_key)
+        for k in rate_keys:
+            login_rate_limiter.hit(k)
         audit.record(db, "login_failed", username=payload.username, ip=ip)
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Anmeldedaten ungültig")
@@ -63,7 +66,8 @@ def login(
     if needs_rehash(user.password_hash):
         user.password_hash = hash_password(payload.password)
 
-    login_rate_limiter.reset(rate_key)
+    for k in rate_keys:
+        login_rate_limiter.reset(k)
     _set_session_cookie(response, user.id)
     audit.record(db, "login_success", user_id=user.id, username=user.username, ip=ip)
     db.commit()

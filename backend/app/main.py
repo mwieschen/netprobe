@@ -85,14 +85,21 @@ _dist = settings.frontend_dist
 if _dist.exists() and (_dist / "index.html").exists():
     app.mount("/assets", StaticFiles(directory=str(_dist / "assets")), name="assets")
 
+    _dist_root = _dist.resolve()
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa(full_path: str):
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not Found"}, status_code=404)
-        candidate = _dist / full_path
+        # Path-Traversal verhindern: aufgelöster Pfad muss innerhalb von dist liegen.
+        candidate = (_dist_root / full_path).resolve()
+        try:
+            candidate.relative_to(_dist_root)
+        except ValueError:
+            return FileResponse(_dist_root / "index.html")
         if candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(_dist / "index.html")
+        return FileResponse(_dist_root / "index.html")
 
 else:
 

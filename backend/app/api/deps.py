@@ -29,9 +29,18 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+# Direkte Peers, denen X-Forwarded-For geglaubt wird (nginx läuft auf Loopback).
+TRUSTED_PROXIES = {"127.0.0.1", "::1"}
+
+
 def client_ip(request: Request) -> str:
-    # Nur der direkte Peer; hinter nginx via X-Forwarded-For (vertrauenswürdig im LAN)
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Client-IP ermitteln. X-Forwarded-For wird NUR akzeptiert, wenn der direkte
+    Peer ein vertrauenswürdiger Proxy ist; dann zählt der vom Proxy gesetzte
+    (rechte) Wert. Andernfalls könnte ein Client den Header fälschen und so das
+    Login-Rate-Limit umgehen oder das Audit-Log verfälschen."""
+    peer = request.client.host if request.client else "unknown"
+    if peer in TRUSTED_PROXIES:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[-1].strip()
+    return peer

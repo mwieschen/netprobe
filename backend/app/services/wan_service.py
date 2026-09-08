@@ -19,6 +19,13 @@ def _fping_available() -> bool:
     return shutil.which(settings.fping_bin) is not None
 
 
+def _validate_host(host: str) -> str:
+    # Verhindert Argument-Injection: ein mit "-" beginnender Host würde sonst als Flag gelesen.
+    if host.startswith("-"):
+        raise ValueError(f"Ungültiger Host: {host!r}")
+    return host
+
+
 def build_fping_args(host: str, count: int, timeout_ms: int) -> list[str]:
     # -q: quiet, -C n: n Pings mit Einzelwerten, -p: Periode, -t: Timeout pro Ping
     return [
@@ -30,7 +37,8 @@ def build_fping_args(host: str, count: int, timeout_ms: int) -> list[str]:
         "200",
         "-t",
         str(timeout_ms),
-        host,
+        "--",
+        _validate_host(host),
     ]
 
 
@@ -43,7 +51,8 @@ def build_ping_args(host: str, count: int, timeout_ms: int) -> list[str]:
         str(count),
         "-W",
         str(timeout_s),
-        host,
+        "--",
+        _validate_host(host),
     ]
 
 
@@ -57,6 +66,8 @@ def measure(host: str, count: int, timeout_ms: int) -> tuple[RttStats | None, st
             proc = run_sync(build_ping_args(host, count, timeout_ms), timeout=count * 2 + 10)
             stats = parse_ping_output(proc.stdout, count)
     except ToolNotFoundError as exc:
+        return None, str(exc)
+    except ValueError as exc:
         return None, str(exc)
 
     if not stats.rtts and proc.returncode not in (0, 1):

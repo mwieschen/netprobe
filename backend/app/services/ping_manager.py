@@ -21,7 +21,10 @@ log = get_logger("netprobe.ping")
 
 
 def _build_single_ping_args(host: str, timeout_s: int = 2) -> list[str]:
-    return [settings.ping_bin, "-n", "-c", "1", "-W", str(timeout_s), host]
+    if host.startswith("-"):
+        raise ValueError(f"Ungültiger Host: {host!r}")
+    # "--" trennt Optionen von Operanden, damit ein Host nicht als Flag interpretiert wird.
+    return [settings.ping_bin, "-n", "-c", "1", "-W", str(timeout_s), "--", host]
 
 
 class PingManager:
@@ -39,6 +42,9 @@ class PingManager:
             proc = await run_async(_build_single_ping_args(host), timeout=5)
         except ToolNotFoundError as exc:
             log.error("Ping-Tool fehlt: %s", exc)
+            return None
+        except ValueError as exc:
+            log.error("Ungültiger Ping-Host: %s", exc)
             return None
         if proc.returncode != 0:
             return None
