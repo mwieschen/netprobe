@@ -148,9 +148,19 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   via **WeasyPrint** (lazy import; not a pyproject dep — the installer `pip install`s it into
   the venv, code degrades to HTML-only if missing). Files served by `download_report` are
   path-derived from the id, HTML inline / PDF attachment.
+- `app/api/voip.py` (`/api/voip`) + `app/models/voip.py` — `voip_service.run_test()` checks
+  3CX/SIP reachability with **stdlib only** (`socket`/`ssl`): SIP `OPTIONS` ping (UDP+TCP),
+  SIP-over-TLS handshake timing + cert expiry, WebRTC/HTTPS TCP ports, ICMP quality (reuses
+  `wan_service.measure`), and an optional Digest-auth `REGISTER` (credentials come only from
+  the request body — **never persisted or logged**; TLS `REGISTER` requires a verified cert).
+  Scheduled per server via `scheduler_service.sync_voip_jobs()` (`voip_server_` job prefix).
+  Never places a real call.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
-  host regex, no leading `-`). `iperf3` is added to the installer's apt list; the optional
+  host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
+  inputs. `iperf3` is added to the installer's apt list; the optional
   always-on server unit is `deploy/systemd/netprobe-iperf3.service` (installed disabled).
+- CLI is a package: `app/cli/__init__.py` (`main` dispatcher) + `__main__.py` + per-area
+  modules (`admin.py`, `voip.py`). Entry point stays `app.cli:main`; `python -m app.cli` works.
 
 ### Frontend (`frontend/src/`)
 Vite + React 19 + react-router 7, ECharts used via the direct API in `components/Chart.tsx`

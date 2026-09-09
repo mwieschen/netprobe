@@ -278,6 +278,49 @@ export interface MtuTestResult {
   probes: MtuProbe[];
 }
 
+export interface VoipPortResult {
+  port: number;
+  ok: boolean;
+  ms: number | null;
+}
+
+export interface VoipTest {
+  id: number;
+  server_id: number;
+  ts: string;
+  ok: boolean;
+  source: string;
+  sip_udp_ok: boolean | null;
+  sip_tcp_ok: boolean | null;
+  sip_tls_ok: boolean | null;
+  webrtc_results: VoipPortResult[];
+  sip_response_ms: number | null;
+  sip_response_code: number | null;
+  tls_handshake_ms: number | null;
+  tls_verified: boolean | null;
+  tls_cert_expiry: string | null;
+  loss_pct: number | null;
+  rtt_avg_ms: number | null;
+  registration_ok: boolean | null;
+  registration_detail: string | null;
+  error: string | null;
+}
+
+export interface VoipServer {
+  id: number;
+  name: string;
+  host: string;
+  sip_port: number;
+  sip_tls_port: number;
+  webrtc_ports: string;
+  sip_transport: "udp" | "tcp";
+  check_registration: boolean;
+  enabled: boolean;
+  interval_s: number;
+  created_at: string;
+  last_test: VoipTest | null;
+}
+
 export interface KeyMetric {
   label: string;
   value: string;

@@ -76,10 +76,24 @@ Für den produktiven Betrieb wird **HTTPS** empfohlen:
 3. `NETPROBE_HTTPS_ENABLED=true` in `/etc/netprobe/netprobe.env` setzen (→ Secure-Cookies).
 4. nginx neu laden.
 
+## VoIP-/3CX-Verbindungstest
+
+- Der Test prüft nur die **Erreichbarkeit** (SIP-`OPTIONS`, TLS-Handshake, TCP-Ports,
+  ICMP). Es wird **kein Anruf** aufgebaut.
+- SIP-**Zugangsdaten** für den optionalen `REGISTER`-Test werden ausschließlich
+  transient im RAM für den einen Lauf verarbeitet – **nie** in der Datenbank
+  gespeichert, **nie** geloggt, **nicht** als Prozessargument übergeben.
+- Über SIP-over-TLS wird `REGISTER` nur bei **erfolgreich verifiziertem** Zertifikat
+  gesendet; schlägt die Prüfung fehl, bricht der Registrierungstest ab.
+- Der TLS-Erreichbarkeitstest (ohne Zugangsdaten) misst bei Zertifikatsfehlern
+  einmalig die Handshake-Zeit auch unverifiziert – dabei werden **keine Daten**
+  über die Verbindung gesendet; `tls_verified=false` weist im UI darauf hin.
+
 ## Datenschutz / keine Cloud
 
 - Es werden **keine externen Cloud-Dienste** verwendet und **keine Telemetrie** gesendet.
-  (Der Speedtest kontaktiert Ookla-Messserver – das ist die eigentliche Messung.)
+  (Der Speedtest kontaktiert Ookla-Messserver – das ist die eigentliche Messung.
+  Der VoIP-Test kontaktiert nur die von dir konfigurierte 3CX-Anlage.)
 - Alle Daten verbleiben lokal in SQLite.
 
 ## Empfehlungen

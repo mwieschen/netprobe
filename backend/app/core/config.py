@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     mtu_min: int = 68
     mtu_max: int = 9216
 
+    # --- VoIP / 3CX ---
+    voip_retention_days: int = 365
+
     # --- Retention ---
     ping_raw_retention_days: int = 14
     ping_agg_retention_days: int = 365

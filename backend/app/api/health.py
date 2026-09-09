@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.models.ping import PingJob
 from app.models.speedtest import SpeedtestResult
 from app.models.user import User
+from app.models.voip import VoipServer, VoipTest
 from app.models.wan import WanResult, WanTarget
 from app.schemas.schemas import DashboardHealth, SpeedtestOut
 
@@ -98,6 +99,26 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(get_curre
             }
         )
 
+    # Aktuellster VoIP-Test je 3CX-Server
+    voip_servers = db.execute(select(VoipServer)).scalars().all()
+    voip_current = []
+    for vs in voip_servers:
+        vlast = db.execute(
+            select(VoipTest).where(VoipTest.server_id == vs.id).order_by(VoipTest.ts.desc()).limit(1)
+        ).scalar_one_or_none()
+        voip_current.append(
+            {
+                "server_id": vs.id,
+                "name": vs.name,
+                "host": vs.host,
+                "enabled": vs.enabled,
+                "ok": vlast.ok if vlast else None,
+                "sip_response_ms": vlast.sip_response_ms if vlast else None,
+                "loss_pct": vlast.loss_pct if vlast else None,
+                "ts": vlast.ts.isoformat() if vlast else None,
+            }
+        )
+
     since = utcnow() - timedelta(hours=24)
     disruptions = db.execute(
         select(func.count()).select_from(WanResult).where(WanResult.ok == False, WanResult.ts >= since)  # noqa: E712
@@ -110,6 +131,7 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(get_curre
         if latest_speed
         else None,
         "wan_current": wan_current,
+        "voip_current": voip_current,
         "active_ping_jobs": active_pings,
         "disruptions_24h": disruptions or 0,
     }

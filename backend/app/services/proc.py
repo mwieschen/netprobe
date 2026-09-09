@@ -4,9 +4,16 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+
+# Erlaubte Zeichen für einen Host/IP-Parameter, der an ein externes Programm oder
+# einen Socket übergeben wird. Bewusst restriktiv (Buchstaben, Ziffern, ".", "-",
+# "_", ":" für IPv6). Ein führendes "-" wird zusätzlich unten abgewiesen, damit die
+# Eingabe niemals als Kommandozeilen-Flag interpretiert werden kann.
+_NETWORK_TARGET_RE = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
 
 
 class ToolNotFoundError(RuntimeError):
@@ -26,6 +33,19 @@ def ensure_tool(binary: str) -> str:
     return path
 
 
+def validate_network_target(target: str) -> str:
+    """Validiert einen vom Benutzer übergebenen Host/IP-Parameter.
+
+    Verhindert Argument-Injection (führendes ``-``) und begrenzt den Zeichensatz.
+    Gibt den bereinigten Wert zurück oder wirft ``ValueError``. Zentral, damit alle
+    neuen Dienste (VoIP, Traceroute, Health-Checks) dieselbe Prüfung verwenden.
+    """
+    target = target.strip()
+    if target.startswith("-") or not _NETWORK_TARGET_RE.match(target):
+        raise ValueError(f"Ungültiger Host: {target!r}")
+    return target
+
+
 @dataclass
 class ProcResult:
     returncode: int
@@ -41,6 +61,7 @@ def run_sync(args: list[str], timeout: float | None = None) -> ProcResult:
             args,
             capture_output=True,
             text=True,
+            errors="replace",  # robuste Dekodierung (Tools mit Nicht-UTF-8-Ausgabe)
             timeout=timeout,
             check=False,
         )

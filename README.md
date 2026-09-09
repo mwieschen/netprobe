@@ -24,6 +24,14 @@ durch und ermöglicht sichere Packet Captures mit Basisanalyse – alles lokal,
 - **Packet Capture** – dumpcap für Aufnahme, tshark für Analyse (Protokollhierarchie,
   Top-Endpunkte, TCP/UDP-Conversations, DNS-Queries, TCP-Retransmissions/Resets, TLS-SNI,
   Expert Infos), PCAPNG-Download, CSV/JSON-Export, sicherer Display-Filter (Limit 1.000 Pakete).
+- **Langzeit-Captures** – dumpcap-Ringpuffer-Jobs mit Auto-Resume nach Neustart.
+- **iperf3** – verwalteter Server + Client-Tests (TCP/UDP), Durchsatz/Jitter/Verlust.
+- **MTU-Test** – Pfad-MTU-Ermittlung per binärer Suche (`ping -M do`).
+- **VoIP / 3CX** – SIP-/SIP-TLS-/WebRTC-Erreichbarkeit, SIP-`OPTIONS`-Antwortzeit,
+  TLS-Handshake & Zertifikatsablauf, ICMP-Verlust, optionaler Registrierungstest
+  (Zugangsdaten werden nicht gespeichert). **Kein Anruf.**
+- **Reports** – passive PCAP-Analyse + aktive Testergebnisse als druckfreundliches
+  HTML (optional PDF via WeasyPrint).
 - **Authentifizierung** – lokale Benutzer mit Argon2, RBAC (`admin`/`viewer`),
   Rate-Limiting, Audit-Log, HttpOnly/SameSite-Cookies.
 

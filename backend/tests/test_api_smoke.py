@@ -153,6 +153,69 @@ def test_reports_crud_and_validation(admin):
     assert admin.get("/api/reports/99999").status_code == 404
 
 
+def test_voip_server_crud(admin):
+    resp = admin.post(
+        "/api/voip/servers",
+        json={"name": "3CX Zentrale", "host": "pbx.example.com", "sip_tls_port": 5061},
+    )
+    assert resp.status_code == 201, resp.text
+    server_id = resp.json()["id"]
+    assert resp.json()["last_test"] is None
+
+    resp = admin.get("/api/voip/servers")
+    assert any(s["id"] == server_id for s in resp.json())
+
+    resp = admin.patch(f"/api/voip/servers/{server_id}", json={"enabled": False})
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+
+    resp = admin.get(f"/api/voip/servers/{server_id}/history")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+    resp = admin.delete(f"/api/voip/servers/{server_id}")
+    assert resp.status_code == 204
+
+
+def test_voip_test_run_unreachable_host(admin):
+    resp = admin.post(
+        "/api/voip/servers",
+        json={"name": "tot", "host": "127.0.0.1", "sip_port": 9, "sip_tls_port": 0,
+              "webrtc_ports": "9"},
+    )
+    server_id = resp.json()["id"]
+
+    resp = admin.post(f"/api/voip/servers/{server_id}/test", json={})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["server_id"] == server_id
+    assert isinstance(body["webrtc_results"], list)
+
+    resp = admin.get(f"/api/voip/servers/{server_id}/history")
+    assert len(resp.json()) == 1
+
+    admin.delete(f"/api/voip/servers/{server_id}")
+
+
+def test_voip_server_rejects_bad_host_on_test(admin):
+    resp = admin.post(
+        "/api/voip/servers",
+        json={"name": "x", "host": "-x", "sip_tls_port": 0, "webrtc_ports": ""},
+    )
+    server_id = resp.json()["id"]
+    resp = admin.post(f"/api/voip/servers/{server_id}/test", json={})
+    assert resp.status_code == 201
+    assert resp.json()["ok"] is False
+    assert "Ungültiger Host" in (resp.json()["error"] or "")
+    admin.delete(f"/api/voip/servers/{server_id}")
+
+
+def test_voip_servers_require_auth(client):
+    assert client.get("/api/voip/servers").status_code == 401
+    assert client.post("/api/voip/servers", json={"name": "x", "host": "y"}).status_code == 401
+
+
 def test_openapi_available(client):
     resp = client.get("/api/openapi.json")
     assert resp.status_code == 200

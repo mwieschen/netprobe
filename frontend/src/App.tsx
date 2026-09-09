@@ -10,6 +10,7 @@ import CaptureAnalysisPage from "./pages/CaptureAnalysis";
 import CaptureJobsPage from "./pages/CaptureJobs";
 import Iperf3Page from "./pages/Iperf3";
 import MtuTestPage from "./pages/MtuTest";
+import VoipMonitorPage from "./pages/VoipMonitor";
 import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 
@@ -22,6 +23,7 @@ const NAV = [
   { to: "/capture-jobs", label: "Langzeit-Captures" },
   { to: "/iperf3", label: "iperf3" },
   { to: "/mtu-test", label: "MTU-Test" },
+  { to: "/voip-monitor", label: "VoIP / 3CX" },
   { to: "/settings", label: "Einstellungen" },
   { to: "/users", label: "Benutzer" },
 ];
@@ -64,6 +66,7 @@ export default function App() {
           <Route path="/capture-jobs" element={<CaptureJobsPage />} />
           <Route path="/iperf3" element={<Iperf3Page />} />
           <Route path="/mtu-test" element={<MtuTestPage />} />
+          <Route path="/voip-monitor" element={<VoipMonitorPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

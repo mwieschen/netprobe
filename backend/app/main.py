@@ -24,6 +24,7 @@ from app.api import (
     settings_api,
     speedtest,
     users,
+    voip,
     wan,
 )
 from app.core.config import settings
@@ -89,6 +90,7 @@ for router in (
     iperf3.router,
     mtu.router,
     reports.router,
+    voip.router,
     settings_api.router,
     users.router,
     audit_api.router,

@@ -16,6 +16,16 @@ interface Summary {
     loss_pct: number | null;
     ts: string | null;
   }[];
+  voip_current: {
+    server_id: number;
+    name: string;
+    host: string;
+    enabled: boolean;
+    ok: boolean | null;
+    sip_response_ms: number | null;
+    loss_pct: number | null;
+    ts: string | null;
+  }[];
   active_ping_jobs: number;
   disruptions_24h: number;
 }
@@ -104,6 +114,37 @@ export default function Dashboard() {
             </table>
           </div>
         </div>
+
+        {summary?.voip_current.length ? (
+          <div className="card">
+            <h2>VoIP / 3CX</h2>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Anlage</th>
+                    <th>Status</th>
+                    <th className="num">SIP-Antwort</th>
+                    <th className="num">Loss</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.voip_current.map((v) => (
+                    <tr key={v.server_id}>
+                      <td>
+                        {v.name}
+                        <div className="muted" style={{ fontSize: 12 }}>{v.host}</div>
+                      </td>
+                      <td><Badge ok={v.enabled ? v.ok : null} label={!v.enabled ? "aus" : undefined} /></td>
+                      <td className="num">{fmtNum(v.sip_response_ms, 1, "ms")}</td>
+                      <td className="num">{fmtNum(v.loss_pct, 0, "%")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
 
         <div className="card">
           <h2>System & Speicher</h2>

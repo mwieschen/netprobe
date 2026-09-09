@@ -324,6 +324,74 @@ class ReportPreview(BaseModel):
     interpretations: list[Interpretation]
 
 
+# --- VoIP / 3CX ---
+class VoipServerBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    host: str = Field(min_length=1, max_length=255)
+    sip_port: int = Field(default=5060, ge=1, le=65535)
+    sip_tls_port: int = Field(default=5061, ge=0, le=65535)  # 0 = kein TLS-Test
+    webrtc_ports: str = Field(default="443,5001", max_length=64)
+    sip_transport: str = Field(default="udp", pattern="^(udp|tcp)$")
+    check_registration: bool = False
+    enabled: bool = True
+    interval_s: int = Field(default=300, ge=60, le=86400)
+
+
+class VoipServerCreate(VoipServerBase):
+    pass
+
+
+class VoipServerUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    host: str | None = Field(default=None, max_length=255)
+    sip_port: int | None = Field(default=None, ge=1, le=65535)
+    sip_tls_port: int | None = Field(default=None, ge=0, le=65535)
+    webrtc_ports: str | None = Field(default=None, max_length=64)
+    sip_transport: str | None = Field(default=None, pattern="^(udp|tcp)$")
+    check_registration: bool | None = None
+    enabled: bool | None = None
+    interval_s: int | None = Field(default=None, ge=60, le=86400)
+
+
+class VoipPortResult(BaseModel):
+    port: int
+    ok: bool
+    ms: float | None = None
+
+
+class VoipTestOut(BaseModel):
+    id: int
+    server_id: int
+    ts: datetime
+    ok: bool
+    source: str
+    sip_udp_ok: bool | None
+    sip_tcp_ok: bool | None
+    sip_tls_ok: bool | None
+    webrtc_results: list[VoipPortResult] = []
+    sip_response_ms: float | None
+    sip_response_code: int | None
+    tls_handshake_ms: float | None
+    tls_verified: bool | None
+    tls_cert_expiry: datetime | None
+    loss_pct: float | None
+    rtt_avg_ms: float | None
+    registration_ok: bool | None
+    registration_detail: str | None
+    error: str | None
+
+
+class VoipServerOut(VoipServerBase):
+    id: int
+    created_at: datetime
+    last_test: VoipTestOut | None = None
+
+
+class VoipTestRequest(BaseModel):
+    username: str | None = Field(default=None, max_length=128)
+    password: str | None = Field(default=None, max_length=256)
+
+
 # --- Settings ---
 class SettingsOut(BaseModel):
     speedtest_enabled: bool

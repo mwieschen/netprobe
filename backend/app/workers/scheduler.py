@@ -17,13 +17,15 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import session_scope
+from app.models.voip import VoipServer
 from app.models.wan import WanTarget
-from app.services import kvstore, speedtest_service, wan_service
+from app.services import kvstore, speedtest_service, voip_service, wan_service
 from app.workers.aggregation import aggregate_ping_samples, cleanup_retention
 
 log = get_logger("netprobe.scheduler")
 
 WAN_JOB_PREFIX = "wan_target_"
+VOIP_JOB_PREFIX = "voip_server_"
 
 
 class SchedulerService:
@@ -53,6 +55,16 @@ class SchedulerService:
                 if target is None or not target.enabled:
                     return
                 wan_service.run_target(db, target)
+
+        await asyncio.to_thread(_job)
+
+    async def _scheduled_voip(self, server_id: int) -> None:
+        def _job() -> None:
+            with session_scope() as db:
+                server = db.get(VoipServer, server_id)
+                if server is None or not server.enabled:
+                    return
+                voip_service.run_test(db, server, source="scheduled")
 
         await asyncio.to_thread(_job)
 
@@ -103,9 +115,35 @@ class SchedulerService:
                 coalesce=True,
             )
 
+    def sync_voip_jobs(self) -> None:
+        """Synchronisiert Scheduler-Jobs mit den aktivierten 3CX-Servern."""
+        with session_scope() as db:
+            servers = db.query(VoipServer).all()
+            wanted: dict[str, VoipServer] = {
+                f"{VOIP_JOB_PREFIX}{s.id}": s for s in servers if s.enabled
+            }
+
+        for job in self.scheduler.get_jobs():
+            if job.id.startswith(VOIP_JOB_PREFIX) and job.id not in wanted:
+                job.remove()
+
+        for job_id, server in wanted.items():
+            existing = self.scheduler.get_job(job_id)
+            if existing:
+                existing.remove()
+            self.scheduler.add_job(
+                self._scheduled_voip,
+                IntervalTrigger(seconds=max(60, server.interval_s)),
+                id=job_id,
+                args=[server.id],
+                max_instances=1,
+                coalesce=True,
+            )
+
     def start(self) -> None:
         self.reschedule_speedtest()
         self.sync_wan_jobs()
+        self.sync_voip_jobs()
         self.scheduler.add_job(
             self._aggregate, IntervalTrigger(minutes=5), id="ping_aggregate", coalesce=True
         )

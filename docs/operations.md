@@ -314,6 +314,51 @@ netprobe-Report – <Kunde>
 Metrics). Nach der Erzeugung erscheinen die Key-Metric-Kacheln plus Links für
 HTML und – falls vorhanden – PDF.
 
+### 6. VoIP-/3CX-Verbindungstest
+
+Prüft die Erreichbarkeit einer 3CX-/SIP-Anlage **ohne einen echten Anruf**. Je
+konfiguriertem Server werden folgende Teilprüfungen ausgeführt und als ein
+`voip_tests`-Datensatz aggregiert:
+
+| Teilprüfung | Verfahren |
+|-------------|-----------|
+| SIP UDP / TCP | SIP-`OPTIONS`-Ping am `sip_port`, Statuszeile wird ausgewertet (auch 401/403/405 = „SIP antwortet") |
+| SIP-Antwortzeit / -Code | aus dem `OPTIONS`-Lauf über den konfigurierten Transport |
+| SIP-over-TLS | TLS-Handshake am `sip_tls_port` (0 = aus): Handshake-Zeit, Zertifikatsablauf, `tls_verified` |
+| WebRTC / HTTPS | TCP-Connect je Port aus `webrtc_ports` (Standard `443,5001`) |
+| ICMP-Qualität | 10 Pings zum Host → Verlust % + RTT ø (best effort) |
+| Registrierung (optional) | ein einzelner `REGISTER` mit Digest-Auth – nur wenn SIP-Zugangsdaten im Request mitgegeben werden |
+
+**Gesamturteil `ok`:** SIP über irgendeinen Transport erreichbar **und** – falls
+ein TLS-Port gesetzt ist – TLS-Handshake erfolgreich (**und** ggf. Registrierung
+erfolgreich). WebRTC-/ICMP-Auffälligkeiten stehen im `error`-Feld, sind aber kein
+hartes Kriterium.
+
+| Endpoint | Auth | Zweck |
+|----------|------|-------|
+| `GET /api/voip/servers` | viewer | Liste + jeweils letzter Test (Status-Ampel) |
+| `POST /api/voip/servers` | admin | 3CX-Server anlegen |
+| `PATCH /api/voip/servers/<id>` | admin | ändern (Zeitplan sofort neu synchronisiert) |
+| `DELETE /api/voip/servers/<id>` | admin | löschen (Historie via CASCADE) |
+| `POST /api/voip/servers/<id>/test` | admin | Ad-hoc-Lauf. Body optional `{username, password}` für den Registrierungstest |
+| `GET /api/voip/servers/<id>/history` | viewer | `range=24h\|7d\|30d\|all` |
+| `GET /api/voip/history` | viewer | letzte Läufe über alle Server (Dashboard) |
+
+Der Scheduler misst jeden aktivierten Server im Intervall `interval_s` (min. 60 s).
+Retention: `NETPROBE_VOIP_RETENTION_DAYS` (Standard 365). Keine externen Tools –
+reine Standardbibliothek (`socket`/`ssl`).
+
+**SIP-Zugangsdaten** für den Registrierungstest werden **nie gespeichert oder
+geloggt** und über TLS nur über einen **verifizierten** Kanal gesendet (siehe
+`docs/security.md`).
+
+**CLI:** `python -m app.cli voip-test --server pbx.kunde.example --port 5061`
+(nicht persistierter Einmal-Test).
+
+**UI:** Seite *VoIP / 3CX* – Server-Tabelle mit Ampel, „Jetzt testen", Verlaufs-
+Diagramme (SIP-/TLS-Antwortzeit, Verlust) und Lauf-Historie. Dashboard-Karte
+„VoIP / 3CX", sobald mindestens ein Server konfiguriert ist.
+
 ## Deinstallation
 
 ```bash

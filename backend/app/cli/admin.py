@@ -1,11 +1,4 @@
-"""Kommandozeilen-Werkzeug für Erst-Setup und Administration.
-
-Beispiele::
-
-    python -m app.cli init-db
-    python -m app.cli create-admin --username admin
-    python -m app.cli ensure-admin        # nutzt NETPROBE_ADMIN_USER/PASSWORD
-"""
+"""CLI-Unterbefehle für Datenbank-Setup und Admin-Benutzerverwaltung."""
 
 from __future__ import annotations
 
@@ -71,29 +64,3 @@ def ensure_admin(_: argparse.Namespace) -> None:
         print("NETPROBE_ADMIN_USER/NETPROBE_ADMIN_PASSWORD nicht gesetzt – kein Admin angelegt.")
         return
     _create_admin(settings.admin_user, settings.admin_password)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(prog="netprobe", description="netprobe CLI")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    sub.add_parser("init-db", help="Datenbank-Schema erstellen")
-
-    p_admin = sub.add_parser("create-admin", help="Admin-Benutzer anlegen/aktualisieren")
-    p_admin.add_argument("--username")
-    p_admin.add_argument("--password", help="Nicht empfohlen (erscheint in Prozessliste)")
-    p_admin.add_argument("--force", action="store_true", help="Bestehenden Benutzer überschreiben")
-
-    sub.add_parser("ensure-admin", help="Admin aus Env-Variablen anlegen (nur wenn leer)")
-
-    args = parser.parse_args()
-    if args.command == "init-db":
-        init_db()
-    elif args.command == "create-admin":
-        create_admin(args)
-    elif args.command == "ensure-admin":
-        ensure_admin(args)
-
-
-if __name__ == "__main__":
-    main()

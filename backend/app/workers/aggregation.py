@@ -12,6 +12,7 @@ from app.core.timeutils import utcnow
 from app.db.session import session_scope
 from app.models.ping import PingAggregate, PingSample
 from app.models.speedtest import SpeedtestResult
+from app.models.voip import VoipTest
 from app.models.wan import WanResult
 
 log = get_logger("netprobe.aggregation")
@@ -83,8 +84,12 @@ def cleanup_retention() -> None:
         n3 = db.query(SpeedtestResult).filter(SpeedtestResult.ts < res_cutoff).delete()
         n4 = db.query(WanResult).filter(WanResult.ts < res_cutoff).delete()
 
-        if n1 or n2 or n3 or n4:
+        voip_cutoff = now - timedelta(days=settings.voip_retention_days)
+        n5 = db.query(VoipTest).filter(VoipTest.ts < voip_cutoff).delete()
+
+        if n1 or n2 or n3 or n4 or n5:
             log.info(
-                "Retention: %d Samples, %d Aggregate, %d Speedtests, %d WAN-Ergebnisse gelöscht",
-                n1, n2, n3, n4,
+                "Retention: %d Samples, %d Aggregate, %d Speedtests, %d WAN-Ergebnisse, "
+                "%d VoIP-Tests gelöscht",
+                n1, n2, n3, n4, n5,
             )
