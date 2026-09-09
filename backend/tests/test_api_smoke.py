@@ -307,6 +307,19 @@ def test_health_probe_rejects_bad_type(admin):
     assert resp.status_code == 422
 
 
+def test_dashboard_topology_and_timeline(admin):
+    resp = admin.get("/api/dashboard/topology")
+    assert resp.status_code == 200
+    groups = resp.json()["groups"]
+    assert set(groups) == {"wan", "ping", "voip", "traceroute", "health"}
+
+    resp = admin.get("/api/dashboard/timeline?hours=48")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "events" in body and isinstance(body["events"], list)
+    assert "since" in body
+
+
 def test_openapi_available(client):
     resp = client.get("/api/openapi.json")
     assert resp.status_code == 200

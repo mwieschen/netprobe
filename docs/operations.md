@@ -441,6 +441,17 @@ Retention: `NETPROBE_HEALTH_CHECK_RETENTION_DAYS` (90).
 „Jetzt"-Button, Antwortzeit-Verlauf und typ­spezifischem Konfigurationsformular.
 Dashboard-Kachel „System Health" (ok/Fehler, Namen der fehlschlagenden Prüfungen).
 
+### 9. Dashboard: Topologie & Störungs-Timeline
+
+| Endpoint | Auth | Zweck |
+|----------|------|-------|
+| `GET /api/dashboard/topology` | viewer | alle Ziele (WAN, Dauerping, VoIP, Traceroute, Health) mit letztem Status, gruppiert nach Kategorie |
+| `GET /api/dashboard/timeline?hours=24` | viewer | chronologische Liste fehlgeschlagener Messungen im Fenster (max. 720 h) |
+
+Beides ist rein lesend/abgeleitet – keine eigene Tabelle. Die Dashboard-Seite
+zeigt daraus den Abschnitt *Netzwerk-Topologie* (Status-Badges je Ziel) und
+*Letzte Störungen (24 h)*.
+
 ## Deinstallation
 
 ```bash

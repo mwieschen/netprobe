@@ -36,14 +36,48 @@ interface Summary {
   disruptions_24h: number;
 }
 
+interface TopoItem {
+  id: number;
+  name: string;
+  target: string;
+  enabled: boolean;
+  ok: boolean | null;
+  detail: string | null;
+  ts: string | null;
+}
+interface Topology {
+  groups: Record<"wan" | "ping" | "voip" | "traceroute" | "health", TopoItem[]>;
+}
+interface TimelineEvent {
+  ts: string;
+  category: string;
+  name: string;
+  detail: string;
+}
+
+const TOPO_LABEL: Record<string, string> = {
+  wan: "WAN-Ziele",
+  ping: "Dauerping",
+  voip: "VoIP / 3CX",
+  traceroute: "Traceroute",
+  health: "System Health",
+};
+
 export default function Dashboard() {
   const [health, setHealth] = useState<DashboardHealth | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [topology, setTopology] = useState<Topology | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
 
   useEffect(() => {
     const load = () => {
       api.get<DashboardHealth>("/api/dashboard/health").then(setHealth).catch(() => {});
       api.get<Summary>("/api/dashboard/summary").then(setSummary).catch(() => {});
+      api.get<Topology>("/api/dashboard/topology").then(setTopology).catch(() => {});
+      api
+        .get<{ events: TimelineEvent[] }>("/api/dashboard/timeline?hours=24")
+        .then((d) => setTimeline(d.events))
+        .catch(() => {});
     };
     load();
     const t = setInterval(load, 15000);
@@ -207,6 +241,63 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {topology && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2>Netzwerk-Topologie</h2>
+          {(Object.keys(TOPO_LABEL) as (keyof Topology["groups"])[])
+            .filter((g) => topology.groups[g].length > 0)
+            .map((g) => (
+              <div key={g} style={{ marginBottom: 12 }}>
+                <div className="muted" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                  {TOPO_LABEL[g]}
+                </div>
+                <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                  {topology.groups[g].map((it) => (
+                    <span
+                      key={`${g}-${it.id}`}
+                      className={`badge ${it.ok === null ? "dim" : it.ok ? "ok" : "err"}`}
+                      title={`${it.target}${it.detail ? " · " + it.detail : ""}`}
+                    >
+                      {it.name}
+                      {!it.enabled ? " (aus)" : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Letzte Störungen (24 h)</h2>
+        {timeline.length ? (
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Zeit</th>
+                  <th>Bereich</th>
+                  <th>Ziel</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {timeline.map((e, i) => (
+                  <tr key={i}>
+                    <td>{fmtDateTime(e.ts)}</td>
+                    <td>{TOPO_LABEL[e.category] ?? e.category}</td>
+                    <td>{e.name}</td>
+                    <td className="muted">{e.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted">Keine Störungen im Zeitfenster.</p>
+        )}
+      </div>
     </div>
   );
 }
