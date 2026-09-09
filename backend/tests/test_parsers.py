@@ -8,6 +8,7 @@ from app.services.parsers import (
     compute_jitter,
     compute_rtt_stats,
     parse_fping_output,
+    parse_iperf3_json,
     parse_ping_output,
     parse_ping_single,
     parse_speedtest_json,
@@ -133,3 +134,64 @@ def test_ping_manager_rejects_dash_host():
     assert "--" in args and args[-1] == "192.168.1.1"
     with pytest.raises(ValueError):
         _build_single_ping_args("-eval")
+
+
+def test_parse_iperf3_json_tcp():
+    raw = json.dumps(
+        {
+            "start": {"test_start": {"protocol": "TCP"}},
+            "end": {
+                "sum_sent": {"bits_per_second": 940_000_000, "retransmits": 12},
+                "sum_received": {"bits_per_second": 935_000_000},
+            },
+        }
+    )
+    p = parse_iperf3_json(raw)
+    assert p.ok and p.protocol == "tcp"
+    assert p.sent_mbps == 940.0
+    assert p.recv_mbps == 935.0
+    assert p.retransmits == 12
+
+
+def test_parse_iperf3_json_udp():
+    raw = json.dumps(
+        {
+            "start": {"test_start": {"protocol": "UDP"}},
+            "end": {"sum": {"bits_per_second": 50_000_000, "jitter_ms": 0.8, "lost_percent": 1.5}},
+        }
+    )
+    p = parse_iperf3_json(raw)
+    assert p.ok and p.protocol == "udp"
+    assert p.sent_mbps == 50.0
+    assert p.jitter_ms == 0.8
+    assert p.lost_percent == 1.5
+
+
+def test_parse_iperf3_json_error():
+    p = parse_iperf3_json(json.dumps({"error": "unable to connect to server"}))
+    assert not p.ok
+    assert "unable to connect" in p.error
+
+
+def test_iperf3_client_args_reject_dash_host():
+    import pytest
+
+    from app.services.iperf_service import build_client_args
+
+    args = build_client_args("10.0.0.1", 5201, 10, 2, udp=True, reverse=True)
+    assert args[-2:] == ["-c", "10.0.0.1"]
+    assert "-u" in args and "-R" in args
+    with pytest.raises(ValueError):
+        build_client_args("-R", 5201, 10, 1, udp=False, reverse=False)
+
+
+def test_mtu_probe_args_use_separator():
+    import pytest
+
+    from app.services.mtu_service import _build_probe_args, _validate_target
+
+    args = _build_probe_args("1.1.1.1", 1472, 2)
+    assert "--" in args and args[-1] == "1.1.1.1"
+    assert "-M" in args and args[args.index("-M") + 1] == "do"
+    with pytest.raises(ValueError):
+        _validate_target("-s 9999")

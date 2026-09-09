@@ -31,13 +31,16 @@ class PingManager:
     def __init__(self) -> None:
         self._tasks: dict[int, asyncio.Task] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Merkt sich, für welche Jobs ein Ping-Fehler bereits geloggt wurde,
+        # damit das Log bei dauerhaften Problemen nicht überläuft.
+        self._warned: set[int] = set()
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Merkt sich das Haupt-Event-Loop, damit Jobs auch aus Threadpool-
         Kontext (synchrone Endpunkte) sicher gestartet werden können."""
         self._loop = loop
 
-    async def _ping_once(self, host: str) -> float | None:
+    async def _ping_once(self, host: str, job_id: int | None = None) -> float | None:
         try:
             proc = await run_async(_build_single_ping_args(host), timeout=5)
         except ToolNotFoundError as exc:
@@ -47,7 +50,26 @@ class PingManager:
             log.error("Ungültiger Ping-Host: %s", exc)
             return None
         if proc.returncode != 0:
+            # returncode 1 = Ziel nicht erreichbar / Timeout (normaler Paketverlust).
+            # Andere Codes bzw. Meldungen auf stderr deuten auf ein Konfigurationsproblem
+            # hin (fehlendes CAP_NET_RAW: "Operation not permitted"). Einmalig pro Job loggen.
+            err = proc.stderr.strip()
+            if job_id is not None and job_id not in self._warned and (proc.returncode != 1 or err):
+                self._warned.add(job_id)
+                log.warning(
+                    "Dauerping-Job %s: Ping fehlgeschlagen (rc=%s) %s",
+                    job_id,
+                    proc.returncode,
+                    err or "(keine Ausgabe)",
+                )
+                if "not permitted" in err.lower():
+                    log.warning(
+                        "Hinweis: 'ping' benötigt CAP_NET_RAW. Bitte AmbientCapabilities in "
+                        "der systemd-Unit prüfen bzw. scripts/fix-permissions.sh ausführen."
+                    )
             return None
+        if job_id is not None:
+            self._warned.discard(job_id)
         return parse_ping_single(proc.stdout)
 
     async def _run_job(self, job_id: int, host: str, interval_s: int) -> None:
@@ -55,7 +77,7 @@ class PingManager:
         log.info("Dauerping-Job %s gestartet (%s, alle %ss)", job_id, host, interval_s)
         try:
             while True:
-                rtt = await self._ping_once(host)
+                rtt = await self._ping_once(host, job_id)
                 ts = utcnow()
                 ok = rtt is not None
                 with session_scope() as db:
@@ -97,6 +119,7 @@ class PingManager:
             self._loop.call_soon_threadsafe(self._create_task, job_id, host, interval_s)
 
     def stop(self, job_id: int) -> None:
+        self._warned.discard(job_id)
         task = self._tasks.pop(job_id, None)
         if task is not None and not task.done():
             loop = self._loop

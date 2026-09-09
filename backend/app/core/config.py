@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     capture_max_size_mb: int = 500
     capture_retention_days: int = 14
 
+    # --- Langzeit-Captures (Ringpuffer) ---
+    capture_job_max_filesize_mb: int = 1000
+    capture_job_max_files: int = 200
+    # Obergrenze für den Plattenverbrauch eines Jobs (max_filesize_mb * max_files).
+    capture_job_max_total_mb: int = 51_200  # 50 GiB
+
+    # --- iperf3 ---
+    iperf3_bin: str = "iperf3"
+    iperf3_server_port: int = 5201
+
+    # --- MTU-Test ---
+    mtu_min: int = 68
+    mtu_max: int = 9216
+
     # --- Retention ---
     ping_raw_retention_days: int = 14
     ping_agg_retention_days: int = 365
@@ -76,6 +90,35 @@ class Settings(BaseSettings):
     # --- Analyse-Limits ---
     tshark_timeout_s: int = 120
     display_filter_max_packets: int = 1000
+    capinfos_bin: str = "capinfos"
+    # Obergrenze für die Grundanalyse: es werden höchstens so viele Pakete vom
+    # Dateianfang ausgewertet (Kopf-Sample). Für größere Captures wird die Analyse
+    # als "sampled" markiert.
+    analysis_max_packets: int = 200_000
+    # Anzahl Einträge in Top-Listen (Protokolle, Conversations).
+    analysis_top_n: int = 20
+
+    # --- Analyse-Schwellwerte für Warnungen ---
+    analysis_broadcast_warn_pct: float = 10.0
+    analysis_multicast_warn_pct: float = 30.0
+    analysis_tcp_retransmission_warn_pct: float = 5.0
+    analysis_tcp_reset_warn: int = 50
+
+    # --- Reports ---
+    reports_dir: Path = Path("/var/lib/netprobe/reports")
+    # Zeitfenster, aus dem aktive Testergebnisse in einen Report übernommen werden.
+    report_test_lookback_hours: int = 168  # 7 Tage
+    # Fenster für die Dauerping-Auswertung im Report.
+    report_ping_window_hours: int = 24
+
+    # --- Schwellwerte für Report-Warnungen (aktive Tests) ---
+    report_ping_loss_warn_pct: float = 1.0
+    report_udp_loss_warn_pct: float = 1.0
+    # Retransmissions je iperf3-TCP-Test (absolut), ab dem gewarnt wird.
+    report_tcp_retransmit_warn: int = 100
+    report_jitter_warn_ms: float = 30.0
+    # Pfad-MTU, unter der auf mögliche PMTUD-/Fragmentierungsprobleme hingewiesen wird.
+    report_mtu_info_below: int = 1500
 
     # --- Login / Rate Limiting ---
     login_rate_max_attempts: int = 5

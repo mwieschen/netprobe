@@ -34,6 +34,12 @@ dev = [
     "mypy>=1.10",
     "types-python-dateutil",
 ]
+# Optionale PDF-Ausgabe für Reports. Benötigt zusätzlich Pango-Systembibliotheken
+# (libpango-1.0-0, libpangoft2-1.0-0). Ohne dieses Extra werden Reports nur als
+# HTML erzeugt.
+pdf = [
+    "weasyprint>=60",
+]
 
 [project.scripts]
 netprobe = "app.cli:main"

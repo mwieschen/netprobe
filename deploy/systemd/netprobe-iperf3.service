@@ -1,0 +1,31 @@
+[Unit]
+Description=netprobe – iperf3-Server (optional, dauerhaft)
+Documentation=https://iperf.fr/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netprobe
+Group=netprobe
+# Port ggf. anpassen (muss zum Wert in der netprobe-UI passen, falls beide genutzt
+# werden – besser NUR eine der beiden Varianten aktiv lassen).
+ExecStart=/usr/bin/iperf3 --server --port 5201
+Restart=on-failure
+RestartSec=5
+
+# --- Härtung ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

@@ -160,24 +160,59 @@ def _count_packets(path: Path) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def analyze(path: Path) -> dict:
-    """Sichere Basisanalyse einer PCAP-Datei über tshark."""
+_METRIC_FIELDS = (
+    "eth.dst.ig",
+    "eth.dst",
+    "frame.len",
+    "_ws.col.Protocol",
+    "ip.src",
+    "ip.dst",
+    "tcp.flags",
+)
+
+
+def _true_packet_count(path: Path) -> int | None:
+    """Gesamtzahl Pakete über ``capinfos`` (liest nur Header/Index, sehr schnell)."""
+    try:
+        proc = run_sync([settings.capinfos_bin, "-c", "-M", str(path)], timeout=30)
+    except ToolNotFoundError:
+        return None
+    m = re.search(r"Number of packets:\s*(\d+)", proc.stdout)
+    return int(m.group(1)) if m else None
+
+
+def analyze(path: Path, max_packets: int | None = None) -> dict:
+    """Sichere Grundanalyse einer PCAP-Datei über tshark.
+
+    Es werden höchstens ``max_packets`` Pakete vom Dateianfang ausgewertet
+    (Standard: ``settings.analysis_max_packets``). Für größere Captures ist
+    ``sampled`` gesetzt und ``packet_count`` weist die tatsächliche Gesamtzahl aus.
+    """
     if not path.exists():
         raise FileNotFoundError(str(path))
 
+    cap = max(1000, int(max_packets) if max_packets else settings.analysis_max_packets)
+    base = [settings.tshark_bin, "-r", str(path), "-c", str(cap)]
+    top_n = settings.analysis_top_n
+
     def _z(*z_args: str) -> str:
-        proc = run_sync(
-            [settings.tshark_bin, "-r", str(path), "-q", *z_args],
-            timeout=settings.tshark_timeout_s,
-        )
+        proc = run_sync([*base, "-q", *z_args], timeout=settings.tshark_timeout_s)
         return proc.stdout
 
-    def _fields(*field_args: str) -> list[str]:
-        args = [settings.tshark_bin, "-r", str(path), "-T", "fields"]
+    def _fields_filtered(dfilter: str, *field_args: str) -> list[str]:
+        args = [*base, "-Y", dfilter, "-T", "fields"]
         for f in field_args:
             args += ["-e", f]
         proc = run_sync(args, timeout=settings.tshark_timeout_s)
         return tp.parse_field_lines(proc.stdout)
+
+    # Ein Durchlauf für Verteilung, Top-Protokolle, Top-Conversations, TCP-Anzahl.
+    metric_args = [*base, "-T", "fields", "-E", "occurrence=f", "-E", "separator=\t"]
+    for f in _METRIC_FIELDS:
+        metric_args += ["-e", f]
+    metrics = tp.parse_capture_metrics(
+        run_sync(metric_args, timeout=settings.tshark_timeout_s).stdout, top_n=top_n
+    )
 
     protocol_hierarchy = tp.parse_protocol_hierarchy(_z("-z", "io,phs"))
     endpoints = tp.parse_endpoints(_z("-z", "endpoints,ip"))
@@ -185,19 +220,44 @@ def analyze(path: Path) -> dict:
     udp_conv = tp.parse_conversations(_z("-z", "conv,udp"))
     expert = tp.parse_expert_info(_z("-z", "expert"))
 
-    dns = tp.aggregate_dns_queries(
-        _fields_filtered(path, "dns.flags.response == 0", "dns.qry.name")
-    )
+    dns = tp.aggregate_dns_queries(_fields_filtered("dns.flags.response == 0", "dns.qry.name"))
     tls_sni = tp.aggregate_tls_sni(
-        _fields_filtered(path, "tls.handshake.extensions_server_name", "tls.handshake.extensions_server_name")
+        _fields_filtered(
+            "tls.handshake.extensions_server_name", "tls.handshake.extensions_server_name"
+        )
     )
-    retrans = len(_fields_filtered(path, "tcp.analysis.retransmission", "frame.number"))
-    resets = len(_fields_filtered(path, "tcp.flags.reset == 1", "frame.number"))
+    retrans = len(_fields_filtered("tcp.analysis.retransmission", "frame.number"))
+    dup_acks = len(_fields_filtered("tcp.analysis.duplicate_ack", "frame.number"))
+    resets = len(_fields_filtered("tcp.flags.reset == 1", "frame.number"))
 
-    total_packets = sum(e["frames"] for e in protocol_hierarchy if e["level"] == 0) or None
+    tcp_packets = metrics["tcp_packets"]
+    tcp_health = {
+        "tcp_packets": tcp_packets,
+        "retransmissions": retrans,
+        "retransmission_pct": round(retrans / tcp_packets * 100, 2) if tcp_packets else 0.0,
+        "dup_acks": dup_acks,
+        "dup_ack_pct": round(dup_acks / tcp_packets * 100, 2) if tcp_packets else 0.0,
+        "resets": resets,
+    }
+
+    analyzed = metrics["packets_analyzed"]
+    true_total = _true_packet_count(path)
+    packet_count = true_total if true_total is not None else analyzed
+    sampled = analyzed >= cap and packet_count > analyzed
+
+    distribution = metrics["frame_distribution"]
+    warnings = _analysis_warnings(distribution, tcp_health)
 
     return {
-        "packet_count": total_packets,
+        "packet_count": packet_count,
+        "packets_analyzed": analyzed,
+        "sampled": sampled,
+        "frame_distribution": distribution,
+        "top_protocols": metrics["top_protocols"],
+        "top_conversations": metrics["top_conversations"],
+        "tcp_health": tcp_health,
+        "warnings": warnings,
+        # bestehende Felder (Kompatibilität)
         "protocol_hierarchy": protocol_hierarchy,
         "top_endpoints": endpoints[:50],
         "tcp_conversations": tcp_conv[:50],
@@ -210,27 +270,85 @@ def analyze(path: Path) -> dict:
     }
 
 
-def _fields_filtered(path: Path, dfilter: str, *field_args: str) -> list[str]:
-    args = [settings.tshark_bin, "-r", str(path), "-Y", dfilter, "-T", "fields"]
-    for f in field_args:
-        args += ["-e", f]
-    proc = run_sync(args, timeout=settings.tshark_timeout_s)
-    return tp.parse_field_lines(proc.stdout)
+def _analysis_warnings(distribution: dict, tcp_health: dict) -> list[dict]:
+    """Erzeugt Warnungen anhand der zentral in ``settings`` definierten Schwellwerte."""
+    warnings: list[dict] = []
+    bpct = distribution["broadcast_pct"]
+    mpct = distribution["multicast_pct"]
+    if bpct > settings.analysis_broadcast_warn_pct:
+        warnings.append({
+            "level": "warn",
+            "code": "high_broadcast",
+            "message": f"Hoher Broadcast-Anteil: {bpct} % (Schwelle "
+                       f"{settings.analysis_broadcast_warn_pct} %).",
+        })
+    if mpct > settings.analysis_multicast_warn_pct:
+        warnings.append({
+            "level": "warn",
+            "code": "high_multicast",
+            "message": f"Hoher Multicast-Anteil: {mpct} % (Schwelle "
+                       f"{settings.analysis_multicast_warn_pct} %).",
+        })
+    rpct = tcp_health["retransmission_pct"]
+    if tcp_health["tcp_packets"] >= 100 and rpct > settings.analysis_tcp_retransmission_warn_pct:
+        warnings.append({
+            "level": "warn",
+            "code": "high_tcp_retransmission",
+            "message": f"Hohe TCP-Retransmission-Rate: {rpct} % (Schwelle "
+                       f"{settings.analysis_tcp_retransmission_warn_pct} %).",
+        })
+    if tcp_health["resets"] > settings.analysis_tcp_reset_warn:
+        warnings.append({
+            "level": "info",
+            "code": "many_tcp_resets",
+            "message": f"Viele TCP-RST-Pakete: {tcp_health['resets']} "
+                       f"(Schwelle {settings.analysis_tcp_reset_warn}).",
+        })
+    return warnings
 
 
-def apply_display_filter(path: Path, dfilter: str, offset: int = 0, limit: int | None = None) -> dict:
-    """Wendet einen Display-Filter auf eine vorhandene PCAP an.
-    Begrenzt auf max. ``display_filter_max_packets`` Pakete, mit Paging."""
-    dfilter = validate_dfilter(dfilter)
+def conversations_ip(path: Path) -> list[dict]:
+    """IP-Conversations einer PCAP (``tshark -q -z conv,ip``)."""
+    proc = run_sync(
+        [settings.tshark_bin, "-r", str(path), "-q", "-z", "conv,ip"],
+        timeout=settings.tshark_timeout_s,
+    )
+    return tp.parse_conversations(proc.stdout)
+
+
+def capture_stats(path: Path, buckets: int = 120) -> dict:
+    """Einfache I/O-Statistik über die Zeit (Pakete/s, Bit/s) plus Gesamtwerte."""
+    proc = run_sync(
+        [
+            settings.tshark_bin,
+            "-r",
+            str(path),
+            "-T",
+            "fields",
+            "-e",
+            "frame.time_epoch",
+            "-e",
+            "frame.len",
+        ],
+        timeout=settings.tshark_timeout_s,
+    )
+    rows = tp.parse_epoch_len_lines(proc.stdout)
+    return tp.compute_io_buckets(rows, buckets)
+
+
+def apply_display_filter(path: Path, dfilter: str = "", offset: int = 0, limit: int | None = None) -> dict:
+    """Wendet einen Display-Filter auf eine vorhandene PCAP an und liefert eine
+    Paketliste. Ein leerer Filter listet alle Pakete. Begrenzt auf max.
+    ``display_filter_max_packets`` Pakete, mit Paging."""
+    dfilter = (dfilter or "").strip()
     max_pkts = settings.display_filter_max_packets
     limit = max_pkts if limit is None else min(limit, max_pkts)
+    offset = max(0, offset)
 
-    args = [
-        settings.tshark_bin,
-        "-r",
-        str(path),
-        "-Y",
-        dfilter,
+    args = [settings.tshark_bin, "-r", str(path)]
+    if dfilter:
+        args += ["-Y", validate_dfilter(dfilter)]
+    args += [
         "-T",
         "fields",
         "-e",

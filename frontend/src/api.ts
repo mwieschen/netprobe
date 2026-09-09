@@ -109,6 +109,212 @@ export interface Capture {
   error: string | null;
 }
 
+export interface PacketRow {
+  number: string;
+  time_epoch: string;
+  src: string;
+  dst: string;
+  protocol: string;
+  length: string;
+  info: string;
+}
+
+export interface PacketList {
+  total: number;
+  offset: number;
+  limit: number;
+  packets: PacketRow[];
+}
+
+export interface IpConversation {
+  endpoint_a: string;
+  endpoint_b: string;
+  frames_ab: number;
+  bytes_ab: number;
+  frames_ba: number;
+  bytes_ba: number;
+  frames_total: number;
+  bytes_total: number;
+}
+
+export interface CaptureStatsBucket {
+  t_epoch: number;
+  packets_per_s: number;
+  bits_per_s: number;
+}
+
+export interface CaptureStats {
+  first_ts: number | null;
+  last_ts: number | null;
+  duration_s: number;
+  total_packets: number;
+  total_bytes: number;
+  avg_pps: number;
+  avg_bps: number;
+  interval_s: number;
+  series: CaptureStatsBucket[];
+}
+
+export interface FrameDistribution {
+  total: number;
+  unicast: number;
+  broadcast: number;
+  multicast: number;
+  other: number;
+  unicast_pct: number;
+  broadcast_pct: number;
+  multicast_pct: number;
+  other_pct: number;
+}
+
+export interface TopProtocol {
+  protocol: string;
+  packets: number;
+  bytes: number;
+}
+
+export interface TopConversation {
+  addr_a: string;
+  addr_b: string;
+  packets: number;
+  bytes: number;
+}
+
+export interface TcpHealth {
+  tcp_packets: number;
+  retransmissions: number;
+  retransmission_pct: number;
+  dup_acks: number;
+  dup_ack_pct: number;
+  resets: number;
+}
+
+export interface AnalysisWarning {
+  level: "warn" | "info";
+  code: string;
+  message: string;
+}
+
+export interface CaptureAnalysis {
+  packet_count: number | null;
+  packets_analyzed: number;
+  sampled: boolean;
+  frame_distribution: FrameDistribution;
+  top_protocols: TopProtocol[];
+  top_conversations: TopConversation[];
+  tcp_health: TcpHealth;
+  warnings: AnalysisWarning[];
+  protocol_hierarchy: { level: number; protocol: string; frames: number; bytes: number }[];
+  top_endpoints: { address: string; packets: number; bytes: number }[];
+  tcp_conversations: { endpoint_a: string; endpoint_b: string; bytes_total: number }[];
+  udp_conversations: { endpoint_a: string; endpoint_b: string; bytes_total: number }[];
+  dns_queries: { name: string; count: number }[];
+  tls_sni: { server_name: string; count: number }[];
+  tcp_retransmissions: number;
+  tcp_resets: number;
+  expert_infos: { severity: string; protocol: string; summary: string; count: number }[];
+}
+
+export interface CaptureJob {
+  id: number;
+  name: string;
+  iface: string;
+  bpf: string | null;
+  max_file_size_mb: number;
+  max_files: number;
+  status: string;
+  created_at: string;
+  stopped_at: string | null;
+  error: string | null;
+}
+
+export interface CaptureJobFile {
+  name: string;
+  size_bytes: number;
+  mtime: string;
+}
+
+export interface Iperf3Result {
+  id: number;
+  ts: string;
+  ok: boolean;
+  host: string;
+  port: number;
+  protocol: string;
+  duration_s: number;
+  parallel: number;
+  reverse: boolean;
+  sent_mbps: number | null;
+  recv_mbps: number | null;
+  jitter_ms: number | null;
+  lost_percent: number | null;
+  lost_packets: number | null;
+  packets: number | null;
+  out_of_order: number | null;
+  retransmits: number | null;
+  error: string | null;
+}
+
+export interface Iperf3ServerStatus {
+  running: boolean;
+  port: number;
+}
+
+export interface MtuProbe {
+  mtu: number;
+  ok: boolean;
+}
+
+export interface MtuTestResult {
+  id: number;
+  ts: string;
+  target: string;
+  ok: boolean;
+  path_mtu: number | null;
+  min_mtu: number;
+  max_mtu: number;
+  probe_count: number;
+  error: string | null;
+  probes: MtuProbe[];
+}
+
+export interface KeyMetric {
+  label: string;
+  value: string;
+  sub: string;
+  level: "ok" | "warn" | "info" | "na";
+}
+
+export interface Interpretation {
+  level: "ok" | "warn" | "info";
+  text: string;
+}
+
+export interface Report {
+  id: number;
+  ts: string;
+  title: string;
+  capture_id: number | null;
+  job_id: number | null;
+  customer: string;
+  location: string;
+  notes: string | null;
+  sections: string[];
+  has_pdf: boolean;
+  error: string | null;
+  html_url: string;
+  pdf_url: string | null;
+  key_metrics: KeyMetric[];
+  interpretations: Interpretation[];
+}
+
+export interface ReportPreview {
+  source: Record<string, string>;
+  sections: string[];
+  key_metrics: KeyMetric[];
+  interpretations: Interpretation[];
+}
+
 export interface AuditEntry {
   id: number;
   ts: string;

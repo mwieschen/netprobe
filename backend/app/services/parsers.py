@@ -159,3 +159,63 @@ def parse_ping_single(stdout: str) -> float | None:
     """Extrahiert die RTT eines einzelnen Ping-Aufrufs; None bei Timeout."""
     m = _PING_TIME.search(stdout)
     return float(m.group(1)) if m else None
+
+
+# --- iperf3 ---------------------------------------------------------------
+
+
+@dataclass
+class Iperf3Parsed:
+    ok: bool
+    protocol: str | None = None
+    sent_mbps: float | None = None
+    recv_mbps: float | None = None
+    jitter_ms: float | None = None
+    lost_percent: float | None = None
+    lost_packets: int | None = None
+    packets: int | None = None
+    out_of_order: int | None = None
+    retransmits: int | None = None
+    error: str | None = None
+
+
+def parse_iperf3_json(raw: str) -> Iperf3Parsed:
+    """Parst die JSON-Ausgabe von ``iperf3 -c … -J``.
+
+    Durchsatz wird von iperf3 in Bit/s geliefert; Umrechnung in Mbit/s = ``/ 1e6``.
+    """
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return Iperf3Parsed(ok=False, error=f"Ungültiges JSON: {exc}")
+
+    if isinstance(data, dict) and data.get("error"):
+        return Iperf3Parsed(ok=False, error=str(data["error"]))
+
+    end = data.get("end") or {}
+    start = data.get("start") or {}
+    proto = ((start.get("test_start") or {}).get("protocol") or "").lower() or None
+
+    sum_sent = end.get("sum_sent") or {}
+    sum_recv = end.get("sum_received") or {}
+    udp_sum = end.get("sum") or {}
+
+    sent_bps = sum_sent.get("bits_per_second") or udp_sum.get("bits_per_second")
+    recv_bps = sum_recv.get("bits_per_second")
+    retr = sum_sent.get("retransmits")
+
+    def _int(v: object) -> int | None:
+        return v if isinstance(v, int) else None
+
+    return Iperf3Parsed(
+        ok=True,
+        protocol=proto,
+        sent_mbps=round(sent_bps / 1_000_000, 3) if sent_bps else None,
+        recv_mbps=round(recv_bps / 1_000_000, 3) if recv_bps else None,
+        jitter_ms=_round(udp_sum.get("jitter_ms")),
+        lost_percent=_round(udp_sum.get("lost_percent")),
+        lost_packets=_int(udp_sum.get("lost_packets")),
+        packets=_int(udp_sum.get("packets")),
+        out_of_order=_int(udp_sum.get("out_of_order")),
+        retransmits=_int(retr),
+    )

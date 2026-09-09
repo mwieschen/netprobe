@@ -168,6 +168,162 @@ class DisplayFilterRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
 
 
+# --- Langzeit-Captures ---
+class CaptureJobCreate(BaseModel):
+    name: str = Field(default="", max_length=128)
+    iface: str = Field(min_length=1, max_length=64)
+    bpf: str | None = Field(default=None, max_length=512)
+    max_file_size_mb: int = Field(default=100, ge=1, le=10_000)
+    max_files: int = Field(default=50, ge=1, le=1000)
+
+
+class CaptureJobOut(ORMModel):
+    id: int
+    name: str
+    iface: str
+    bpf: str | None
+    max_file_size_mb: int
+    max_files: int
+    status: str
+    created_at: datetime
+    stopped_at: datetime | None
+    error: str | None
+
+
+class CaptureJobFile(BaseModel):
+    name: str
+    size_bytes: int
+    mtime: str
+
+
+# --- iperf3 ---
+class Iperf3ClientRequest(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=5201, ge=1, le=65535)
+    duration_s: int = Field(default=10, ge=1, le=60)
+    parallel: int = Field(default=1, ge=1, le=32)
+    udp: bool = False
+    reverse: bool = False
+
+
+class Iperf3ResultOut(ORMModel):
+    id: int
+    ts: datetime
+    ok: bool
+    host: str
+    port: int
+    protocol: str
+    duration_s: int
+    parallel: int
+    reverse: bool
+    sent_mbps: float | None
+    recv_mbps: float | None
+    jitter_ms: float | None
+    lost_percent: float | None
+    lost_packets: int | None = None
+    packets: int | None = None
+    out_of_order: int | None = None
+    retransmits: int | None
+    error: str | None
+
+
+class Iperf3ServerStatus(BaseModel):
+    running: bool
+    port: int
+
+
+class Iperf3ServerRequest(BaseModel):
+    enabled: bool
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+
+# --- MTU-Test ---
+class MtuTestRequest(BaseModel):
+    target: str = Field(min_length=1, max_length=255)
+    min_mtu: int = Field(default=576, ge=68, le=9000)
+    max_mtu: int = Field(default=1500, ge=68, le=9216)
+
+
+class MtuProbe(BaseModel):
+    mtu: int
+    ok: bool
+
+
+class MtuTestResult(BaseModel):
+    id: int
+    ts: datetime
+    target: str
+    ok: bool
+    path_mtu: int | None
+    min_mtu: int
+    max_mtu: int
+    probe_count: int
+    error: str | None
+    probes: list[MtuProbe] = []
+
+
+class MtuTestOut(ORMModel):
+    id: int
+    ts: datetime
+    target: str
+    ok: bool
+    path_mtu: int | None
+    min_mtu: int
+    max_mtu: int
+    probe_count: int
+    error: str | None
+
+
+# --- Reports ---
+REPORT_SECTIONS = ("summary", "ping", "speedtest", "iperf3", "mtu", "passive")
+
+
+class ReportCreate(BaseModel):
+    capture_id: int | None = None
+    job_id: int | None = None
+    customer: str = Field(default="", max_length=200)
+    location: str = Field(default="", max_length=200)
+    notes: str | None = Field(default=None, max_length=5000)
+    sections: list[str] = Field(default_factory=lambda: list(REPORT_SECTIONS))
+
+
+class KeyMetric(BaseModel):
+    label: str
+    value: str
+    sub: str
+    level: str  # ok | warn | info | na
+
+
+class Interpretation(BaseModel):
+    level: str  # ok | warn | info
+    text: str
+
+
+class ReportOut(ORMModel):
+    id: int
+    ts: datetime
+    title: str
+    capture_id: int | None
+    job_id: int | None
+    customer: str
+    location: str
+    notes: str | None
+    sections: list[str]
+    has_pdf: bool
+    error: str | None
+    html_url: str = ""
+    pdf_url: str | None = None
+    key_metrics: list[KeyMetric] = []
+    interpretations: list[Interpretation] = []
+
+
+class ReportPreview(BaseModel):
+    source: dict
+    sections: list[str]
+    key_metrics: list[KeyMetric]
+    interpretations: list[Interpretation]
+
+
 # --- Settings ---
 class SettingsOut(BaseModel):
     speedtest_enabled: bool

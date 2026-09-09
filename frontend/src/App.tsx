@@ -6,6 +6,10 @@ import SpeedtestPage from "./pages/Speedtest";
 import WanPage from "./pages/Wan";
 import PingPage from "./pages/Ping";
 import CapturesPage from "./pages/Captures";
+import CaptureAnalysisPage from "./pages/CaptureAnalysis";
+import CaptureJobsPage from "./pages/CaptureJobs";
+import Iperf3Page from "./pages/Iperf3";
+import MtuTestPage from "./pages/MtuTest";
 import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 
@@ -15,6 +19,9 @@ const NAV = [
   { to: "/wan", label: "WAN-Tests" },
   { to: "/ping", label: "Dauerping" },
   { to: "/captures", label: "Packet Captures" },
+  { to: "/capture-jobs", label: "Langzeit-Captures" },
+  { to: "/iperf3", label: "iperf3" },
+  { to: "/mtu-test", label: "MTU-Test" },
   { to: "/settings", label: "Einstellungen" },
   { to: "/users", label: "Benutzer" },
 ];
@@ -53,6 +60,10 @@ export default function App() {
           <Route path="/wan" element={<WanPage />} />
           <Route path="/ping" element={<PingPage />} />
           <Route path="/captures" element={<CapturesPage />} />
+          <Route path="/captures/:id" element={<CaptureAnalysisPage />} />
+          <Route path="/capture-jobs" element={<CaptureJobsPage />} />
+          <Route path="/iperf3" element={<Iperf3Page />} />
+          <Route path="/mtu-test" element={<MtuTestPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

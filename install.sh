@@ -107,6 +107,8 @@ install_packages() {
     # wireshark-common vorab so konfigurieren, dass dumpcap durch Nicht-root
     # nutzbar ist (setuid für Nutzer der Gruppe 'wireshark').
     echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
+    # iperf3 NICHT automatisch als Daemon starten (die netprobe-UI steuert den Server).
+    echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
 
     apt-get install -y -qq \
         python3 python3-venv python3-dev \
@@ -114,8 +116,9 @@ install_packages() {
         nginx \
         sqlite3 \
         tshark wireshark-common \
-        fping iputils-ping mtr-tiny \
-        curl jq tar ca-certificates gnupg lsb-release ssl-cert
+        fping iputils-ping mtr-tiny iperf3 \
+        curl jq tar ca-certificates gnupg lsb-release ssl-cert \
+        libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core
 
     ok "Systempakete installiert."
     ensure_python
@@ -197,11 +200,29 @@ install_speedtest() {
     fi
 
     if command -v speedtest >/dev/null 2>&1; then
-        ok "Speedtest CLI installiert ($(speedtest --version 2>/dev/null | head -n1 || echo ok))."
+        ok "Speedtest CLI installiert ($(speedtest --version 2>/dev/null | head -n1 || echo ok)) -> $(command -v speedtest)."
     else
         warn "Speedtest CLI konnte NICHT installiert werden. Speedtests bleiben deaktiviert,"
         warn "bis die CLI vorhanden ist (siehe README, Abschnitt 'Speedtest CLI manuell')."
     fi
+}
+
+# Akzeptiert Lizenz/GDPR der Ookla-CLI EINMALIG im Kontext des netprobe-Users und
+# legt die Konfiguration unter dessen HOME (/var/lib/netprobe/.config/ookla) an.
+# Ohne das schlägt der erste Speedtest aus dem Dienst fehl, weil ProtectSystem=strict
+# das Schreiben der Zustimmung verhindert. Idempotent (mehrfach ausführbar).
+seed_speedtest_license() {
+    command -v speedtest >/dev/null 2>&1 || return 0
+    id "$APP_USER" >/dev/null 2>&1 || return 0
+    log "Akzeptiere Ookla-Lizenz für Benutzer '${APP_USER}'…"
+    install -d -o "$APP_USER" -g "$APP_GROUP" -m 700 "$DATA_DIR/.config" "$DATA_DIR/.config/ookla"
+    sudo -u "$APP_USER" env \
+        HOME="$DATA_DIR" \
+        XDG_CONFIG_HOME="$DATA_DIR/.config" \
+        XDG_CACHE_HOME="$DATA_DIR/.cache" \
+        speedtest --accept-license --accept-gdpr --progress=no --version >/dev/null 2>&1 \
+        && ok "Ookla-Lizenz akzeptiert." \
+        || warn "Lizenz-Vorabbestätigung fehlgeschlagen; Speedtest versucht es beim ersten Lauf erneut."
 }
 
 # Lädt das offizielle Ookla-Tarball und legt die Binary nach /usr/local/bin.
@@ -242,16 +263,39 @@ setup_user_dirs() {
         ok "Benutzer '${APP_USER}' der Gruppe 'wireshark' hinzugefügt."
     fi
 
-    mkdir -p "$APP_DIR" "$DATA_DIR" "$CAPTURE_DIR" "$LOG_DIR" "$ETC_DIR"
+    # Basisverzeichnisse. HOME des Dienstes ist /var/lib/netprobe (siehe systemd-Unit);
+    # .config/.cache werden von der Ookla Speedtest CLI benötigt, reports/ von der
+    # Report-Funktion.
+    mkdir -p "$APP_DIR" "$DATA_DIR" "$CAPTURE_DIR" "$LOG_DIR" "$ETC_DIR" \
+             "$DATA_DIR/.config/ookla" "$DATA_DIR/.cache" "$DATA_DIR/reports"
     chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$DATA_DIR" "$LOG_DIR"
-    chmod 750 "$DATA_DIR" "$CAPTURE_DIR" "$LOG_DIR"
-    ok "Verzeichnisse angelegt."
+    chmod 750 "$DATA_DIR" "$LOG_DIR" "$DATA_DIR/reports"
+    chmod 700 "$DATA_DIR/.config" "$DATA_DIR/.cache"
 
-    # Sicherstellen, dass dumpcap die nötigen Capabilities besitzt
-    if [ -x /usr/bin/dumpcap ]; then
-        setcap 'cap_net_raw,cap_net_admin=eip' /usr/bin/dumpcap 2>/dev/null || \
-            warn "setcap auf dumpcap fehlgeschlagen; Packet Capture ggf. eingeschränkt."
+    # Capture-Verzeichnis: Eigentümer netprobe, Gruppe 'wireshark' (falls vorhanden),
+    # Modus 2770 (setgid) -> von dumpcap erzeugte PCAP-Dateien erben die Gruppe
+    # 'wireshark', sodass sowohl der Dienst als auch Administratoren in dieser Gruppe
+    # (z. B. für manuelle 'tshark -w …'-Tests) schreiben/lesen können. Idempotent.
+    if getent group wireshark >/dev/null 2>&1; then
+        chown "$APP_USER:wireshark" "$CAPTURE_DIR"
+        chmod 2770 "$CAPTURE_DIR"
+    else
+        chown "$APP_USER:$APP_GROUP" "$CAPTURE_DIR"
+        chmod 2750 "$CAPTURE_DIR"
     fi
+    ok "Verzeichnisse angelegt (Captures: $(stat -c '%U:%G %a' "$CAPTURE_DIR"))."
+
+    # Capabilities für Nicht-root-Messungen:
+    # - Der systemd-Dienst erhält CAP_NET_RAW/CAP_NET_ADMIN über AmbientCapabilities
+    #   (siehe deploy/systemd/netprobe.service); das ist der maßgebliche Pfad, weil
+    #   NoNewPrivileges=true File-Capabilities beim exec unwirksam macht.
+    # - Zusätzlich werden die File-Capabilities auf den Binaries gesetzt, damit auch
+    #   manuelle Aufrufe (Shell, Cronjobs) ohne sudo funktionieren. Fehlschlag ist
+    #   nicht kritisch. Idempotent.
+    setcap 'cap_net_raw,cap_net_admin=eip' "$(command -v dumpcap || echo /usr/bin/dumpcap)" 2>/dev/null \
+        || warn "setcap auf dumpcap fehlgeschlagen; manuelle Captures ggf. eingeschränkt (Dienst nutzt AmbientCapabilities)."
+    setcap 'cap_net_raw+ep' "$(command -v fping || echo /usr/bin/fping)" 2>/dev/null || true
+    setcap 'cap_net_raw+ep' "$(command -v ping  || echo /usr/bin/ping)"  2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -273,6 +317,14 @@ deploy_app() {
     "$VENV_DIR/bin/pip" install --quiet --upgrade pip
     "$VENV_DIR/bin/pip" install --quiet "$APP_DIR/backend"
     ok "Python-Abhängigkeiten installiert."
+
+    # WeasyPrint (Extra "pdf") für die PDF-Erzeugung von Reports – optional.
+    # Die Pango-Systembibliotheken werden in install_packages() mitinstalliert.
+    if "$VENV_DIR/bin/pip" install --quiet "$APP_DIR/backend[pdf]" 2>/dev/null; then
+        ok "WeasyPrint installiert (Report-PDF verfügbar)."
+    else
+        warn "WeasyPrint nicht installiert; Reports werden nur als HTML erzeugt."
+    fi
 
     build_frontend
     chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
@@ -319,16 +371,19 @@ run_migrations() {
 
 setup_admin() {
     # Existiert bereits ein Benutzer? Dann nichts tun (idempotent).
-    local count
-    count="$(cd "$APP_DIR/backend" && sudo -u "$APP_USER" env NETPROBE_ENV_FILE="$ENV_FILE" \
-        "$VENV_DIR/bin/python" - <<'PY' 2>/dev/null || echo 0
+    local count count_script
+    count_script="$(mktemp)"
+    cat > "$count_script" <<'PY'
 from app.db.session import SessionLocal
 from app.models.user import User
 db = SessionLocal()
 print(db.query(User).count())
 db.close()
 PY
-)"
+    chmod 0644 "$count_script"
+    count="$( ( cd "$APP_DIR/backend" && sudo -u "$APP_USER" env NETPROBE_ENV_FILE="$ENV_FILE" \
+        "$VENV_DIR/bin/python" "$count_script" ) 2>/dev/null || echo 0 )"
+    rm -f "$count_script"
     if [ "${count:-0}" -gt 0 ]; then
         ok "Es existiert bereits mindestens ein Benutzer – Admin-Anlage übersprungen."
         return
@@ -367,6 +422,22 @@ setup_systemd() {
     systemctl enable netprobe >/dev/null 2>&1
     systemctl restart netprobe
     ok "Dienst netprobe aktiviert und gestartet."
+}
+
+setup_iperf3_service() {
+    # Optionaler Dauerbetrieb-Server. Wird installiert, aber NICHT aktiviert –
+    # standardmäßig steuert die netprobe-UI einen eigenen iperf3-Subprozess.
+    # Aktivieren mit:  sudo systemctl enable --now netprobe-iperf3
+    cp "$SRC_DIR/deploy/systemd/netprobe-iperf3.service" /etc/systemd/system/netprobe-iperf3.service
+    systemctl daemon-reload
+    if systemctl is-enabled --quiet netprobe-iperf3 2>/dev/null; then
+        systemctl restart netprobe-iperf3 || true
+        ok "iperf3-Server-Dienst (netprobe-iperf3) aktualisiert und aktiv."
+    else
+        ok "iperf3-Server-Dienst installiert (inaktiv; 'systemctl enable --now netprobe-iperf3')."
+    fi
+    # Den vom iperf3-Paket mitgelieferten Dienst NICHT automatisch starten.
+    systemctl disable --now iperf3 >/dev/null 2>&1 || true
 }
 
 setup_nginx() {
@@ -539,11 +610,13 @@ main() {
     check_prereqs
     install_packages
     setup_user_dirs
+    seed_speedtest_license
     deploy_app
     setup_env
     run_migrations
     setup_admin
     setup_systemd
+    setup_iperf3_service
     setup_nginx
     setup_logrotate
     setup_ufw

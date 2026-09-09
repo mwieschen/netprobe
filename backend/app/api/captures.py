@@ -178,6 +178,62 @@ async def display_filter(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
+@router.get("/{capture_id}/packets")
+async def packets(
+    capture_id: int,
+    filter: str = "",
+    offset: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Gefilterte Paketliste (JSON) im Wireshark-Stil. ``filter`` ist ein
+    tshark-Display-Filter; leer = alle Pakete. Ergebnis wird auf
+    ``display_filter_max_packets`` begrenzt (mit ``offset``/``limit`` Paging)."""
+    _cap, path = _require_pcap(db, capture_id)
+    limit = max(1, min(limit, settings.display_filter_max_packets))
+    offset = max(0, offset)
+    try:
+        return await asyncio.to_thread(
+            capture_service.apply_display_filter, path, filter, offset, limit
+        )
+    except CaptureValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except ToolNotFoundError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.get("/{capture_id}/conversations")
+async def conversations(
+    capture_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """IP-Conversations (``tshark -q -z conv,ip``)."""
+    _cap, path = _require_pcap(db, capture_id)
+    try:
+        rows = await asyncio.to_thread(capture_service.conversations_ip, path)
+    except ToolNotFoundError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    return {"conversations": rows}
+
+
+@router.get("/{capture_id}/stats")
+async def capture_stats(
+    capture_id: int,
+    buckets: int = 120,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """I/O-Statistik über die Zeit (Pakete/s, Bit/s) plus Gesamtwerte."""
+    _cap, path = _require_pcap(db, capture_id)
+    buckets = max(10, min(buckets, 500))
+    try:
+        return await asyncio.to_thread(capture_service.capture_stats, path, buckets)
+    except ToolNotFoundError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
 @router.delete("/{capture_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_capture(
     capture_id: int,

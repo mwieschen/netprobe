@@ -128,6 +128,9 @@ speedtest --accept-license --accept-gdpr --version
 | Problem | Ursache | Workaround |
 |---------|---------|------------|
 | `speedtest`-Paket nicht gefunden | Ookla-Repo führt 26.04 noch nicht | Installer nutzt automatisch `noble`-Fallback + Tarball; manuell siehe „Speedtest CLI manuell" |
+| Packet Capture: `Permission denied` beim Schreiben der `.pcap` | Capture-Ordner nicht `netprobe:wireshark 2770` | `sudo ./scripts/fix-permissions.sh` (setzt Owner/Modus, setgid) |
+| Dauerping / WAN-Test liefert nur Timeouts, Log: `Operation not permitted` | Dienst ohne `CAP_NET_RAW` (ältere systemd-Unit ohne `AmbientCapabilities`) | Neue Unit einspielen: `sudo ./install.sh` **oder** `sudo ./scripts/fix-permissions.sh` |
+| Speedtest im UI schlägt fehl, CLI manuell ok | `HOME` des Dienstes (`/opt/netprobe`) durch `ProtectSystem=strict` read-only → Ookla-CLI kann Lizenz nicht speichern | Neue Unit setzt `HOME=/var/lib/netprobe`; `sudo ./scripts/fix-permissions.sh` bestätigt die Lizenz vorab |
 | NodeSource-Setup schlägt fehl | Codename in NodeSource unbekannt | Installer fällt auf Ubuntu-Node-Paket zurück; alternativ `sudo apt-get install -y nodejs npm` |
 | `pip`/Wheel-Build für Python 3.14 langsam | Noch keine vorgebauten Wheels | `build-essential` + `python3-dev` sind installiert; Build aus Quellcode läuft automatisch |
 | `pip install ../README.md`-Fehler bei eigenem Build | Neuere setuptools verbieten Pfade außerhalb des Pakets | Bereits behoben – `backend/pyproject.toml` referenziert keine externe README mehr |

@@ -55,6 +55,7 @@ def dashboard_health(db: Session = Depends(get_db), _: User = Depends(get_curren
         "ping": _tool_available(settings.ping_bin),
         "dumpcap": _tool_available(settings.dumpcap_bin),
         "tshark": _tool_available(settings.tshark_bin),
+        "iperf3": _tool_available(settings.iperf3_bin),
     }
     active = db.query(PingJob).filter(PingJob.status == "running").count()
     status = "ok" if all([tools["ping"]]) else "degraded"

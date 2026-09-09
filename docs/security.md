@@ -10,6 +10,10 @@ Dieses Dokument beschreibt die getroffenen Sicherheitsmaßnahmen und Empfehlunge
 - **nginx** terminiert den LAN-Verkehr auf Port 80/443 und leitet an das Backend weiter.
 - Der systemd-Dienst ist gehärtet (`ProtectSystem=strict`, `PrivateTmp`,
   `NoNewPrivileges`, eingeschränkte `ReadWritePaths`).
+- Für Ping-/Capture-Messungen erhält der Dienst **ausschließlich** `CAP_NET_RAW`
+  und `CAP_NET_ADMIN` (via `AmbientCapabilities`/`CapabilityBoundingSet`), **keine**
+  weiteren Root-Rechte. `HOME` des Dienstes ist `/var/lib/netprobe` (beschreibbar
+  nur dort und in `/var/log/netprobe`).
 
 ## Authentifizierung & Sessions
 
@@ -52,10 +56,13 @@ Benutzern sowie Konfigurationsänderungen. Einsehbar unter *Einstellungen → Au
 ## Packet Capture
 
 - Captures werden mit **dumpcap** erstellt, die Auswertung erfolgt mit **tshark**.
-- dumpcap erhält minimale Capabilities (`cap_net_raw,cap_net_admin`) bzw. läuft über
-  die Gruppe `wireshark`. Die Webanwendung läuft **nicht** als root.
+- dumpcap wird vom Dienst mit den geerbten Capabilities `cap_net_raw,cap_net_admin`
+  ausgeführt (Ambient-Set); für manuelle Nutzung sind zusätzlich die File-Capabilities
+  gesetzt und `netprobe` ist in der Gruppe `wireshark`. Die Webanwendung läuft **nicht** als root.
 - Capture-Dateien werden **außerhalb des Webroots** unter `/var/lib/netprobe/captures`
-  gespeichert und sind nur für den `netprobe`-Benutzer lesbar (`chmod 750`).
+  gespeichert. Das Verzeichnis gehört `netprobe:wireshark` mit Modus `2770` (setgid);
+  Dateien sind damit für den Dienst und für Administratoren der Gruppe `wireshark`
+  zugänglich, nicht jedoch für andere lokale Benutzer.
 - Download- und Analyse-Endpunkte validieren, dass der Pfad innerhalb des
   Capture-Verzeichnisses liegt (Schutz vor Path-Traversal).
 - Die UI enthält eine **Sicherheitshinweis-Seite**: Captures können vertrauliche Daten

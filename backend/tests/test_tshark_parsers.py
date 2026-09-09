@@ -5,8 +5,11 @@ from __future__ import annotations
 from app.services.tshark_parsers import (
     aggregate_dns_queries,
     aggregate_tls_sni,
+    compute_io_buckets,
+    parse_capture_metrics,
     parse_conversations,
     parse_endpoints,
+    parse_epoch_len_lines,
     parse_expert_info,
     parse_protocol_hierarchy,
 )
@@ -66,3 +69,57 @@ def test_parse_expert_info():
     info = parse_expert_info(text)
     assert any(i["severity"] == "Warnings" and i["count"] == 3 for i in info)
     assert any(i["severity"] == "Notes" for i in info)
+
+
+def test_parse_epoch_len_lines():
+    text = "1700000000.000000\t100\n1700000000.500000\t200\n\nkaputt\n"
+    rows = parse_epoch_len_lines(text)
+    assert rows == [(1700000000.0, 100), (1700000000.5, 200)]
+
+
+def test_compute_io_buckets_empty():
+    result = compute_io_buckets([], buckets=10)
+    assert result["total_packets"] == 0
+    assert result["series"] == []
+
+
+def test_parse_capture_metrics():
+    # Felder: eth.dst.ig  eth.dst  frame.len  proto  ip.src  ip.dst  tcp.flags
+    rows = "\n".join(
+        [
+            "0\taa:bb:cc:00:00:01\t100\tTCP\t10.0.0.1\t10.0.0.2\t0x0018",
+            "0\taa:bb:cc:00:00:02\t200\tTCP\t10.0.0.2\t10.0.0.1\t0x0010",
+            "1\t01:00:5e:00:00:fb\t80\tMDNS\t10.0.0.3\t224.0.0.251\t",
+            "1\tff:ff:ff:ff:ff:ff\t60\tARP\t\t\t",
+            "0\t\t50\tTCP\t10.0.0.1\t10.0.0.9\t0x0002",
+        ]
+    )
+    m = parse_capture_metrics(rows, top_n=5)
+    d = m["frame_distribution"]
+    assert d["total"] == 5
+    assert d["unicast"] == 2 and d["broadcast"] == 1 and d["multicast"] == 1 and d["other"] == 1
+    assert d["broadcast_pct"] == 20.0
+    assert m["tcp_packets"] == 3
+    # Top-Protokoll TCP: 3 Pakete, 350 Bytes
+    tcp = next(p for p in m["top_protocols"] if p["protocol"] == "TCP")
+    assert tcp["packets"] == 3 and tcp["bytes"] == 350
+    # Conversation 10.0.0.1<->10.0.0.2: 2 Pakete, 300 Bytes (richtungsunabhängig)
+    conv = next(
+        c for c in m["top_conversations"]
+        if {c["addr_a"], c["addr_b"]} == {"10.0.0.1", "10.0.0.2"}
+    )
+    assert conv["packets"] == 2 and conv["bytes"] == 300
+
+
+def test_compute_io_buckets_basic():
+    # 4 Pakete über 2 Sekunden, 2 Buckets à 1 s
+    rows = [(0.0, 100), (0.4, 100), (1.2, 400), (2.0, 400)]
+    result = compute_io_buckets(rows, buckets=2)
+    assert result["total_packets"] == 4
+    assert result["total_bytes"] == 1000
+    assert result["duration_s"] == 2.0
+    assert len(result["series"]) == 2
+    # erstes Intervall: 2 Pakete / 1 s
+    assert result["series"][0]["packets_per_s"] == 2.0
+    # bits/s im ersten Intervall: 200 Bytes * 8 / 1 s
+    assert result["series"][0]["bits_per_s"] == 1600.0

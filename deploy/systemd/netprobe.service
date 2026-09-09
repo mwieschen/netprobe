@@ -10,6 +10,17 @@ Group=netprobe
 # Konfiguration ausschließlich über diese Datei:
 EnvironmentFile=/etc/netprobe/netprobe.env
 WorkingDirectory=/opt/netprobe/backend
+
+# HOME zeigt auf einen beschreibbaren Pfad innerhalb von ReadWritePaths. Die Ookla
+# Speedtest CLI legt hier ihre Lizenz-/GDPR-Zustimmung und Konfiguration ab
+# (~/.config/ookla). /opt/netprobe ist durch ProtectSystem=strict read-only.
+Environment=HOME=/var/lib/netprobe
+Environment=XDG_CONFIG_HOME=/var/lib/netprobe/.config
+Environment=XDG_CACHE_HOME=/var/lib/netprobe/.cache
+# Expliziter PATH, damit die Speedtest-CLI auch bei Tarball-Installation nach
+# /usr/local/bin zuverlässig gefunden wird.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # gunicorn wird aus dem venv gestartet. Das venv wird beim Setup mit dem System-
 # Python (Ubuntu 22.04/24.04: 3.12, 26.04: 3.14) erzeugt; der Interpreterpfad ist
 # hier bewusst NICHT hartkodiert, damit ein Upgrade der Python-Version nichts bricht.
@@ -34,8 +45,16 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-# dumpcap benötigt CAP_NET_RAW/CAP_NET_ADMIN; dies wird über die dumpcap-Binary
-# (setcap) bzw. die Gruppe 'wireshark' realisiert, NICHT über den Dienst selbst.
+
+# --- Netzwerk-Messungen ohne Root ---
+# ping (Dauerping), fping (WAN-Qualität) und dumpcap (Packet Capture) benötigen
+# CAP_NET_RAW (dumpcap zusätzlich CAP_NET_ADMIN für den Promiscuous-Modus).
+# Da NoNewPrivileges=true die File-Capabilities/​setuid der Binaries beim exec
+# unwirksam macht, werden die Capabilities hier direkt an den Dienst vergeben und
+# über den Ambient-Set an die Kindprozesse vererbt. Das ist die minimale Menge –
+# der Dienst erhält KEINE weiteren Root-Rechte.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target
