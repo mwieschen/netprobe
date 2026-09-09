@@ -235,6 +235,7 @@ def dashboard_timeline(
 ) -> dict:
     """Chronologische Liste der Störungen (fehlgeschlagene Messungen) im Fenster."""
     since = utcnow() - timedelta(hours=max(1, min(hours, 720)))
+    limit = max(1, min(limit, 1000))
     events: list[dict] = []
 
     def names(id_col, name_col) -> dict:
