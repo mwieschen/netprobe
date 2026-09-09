@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from app.cli import admin, voip
+from app.cli import admin, traceroute, voip
 
 
 def main() -> None:
@@ -39,6 +39,13 @@ def main() -> None:
     )
     p_voip.add_argument("--json", action="store_true", help="Ergebnis als JSON ausgeben")
 
+    p_tr = sub.add_parser("traceroute", help="Einmalige Pfad-Analyse (mtr/traceroute)")
+    p_tr.add_argument("--target", required=True, help="FQDN oder IP des Ziels")
+    p_tr.add_argument("--mode", choices=("icmp", "udp", "tcp"), default="icmp")
+    p_tr.add_argument("--geo", action="store_true", help="Geo-/ASN-Auflösung der Hops")
+    p_tr.add_argument("--mtu", action="store_true", help="Pfad-MTU zum Ziel messen")
+    p_tr.add_argument("--json", action="store_true", help="Ergebnis als JSON ausgeben")
+
     args = parser.parse_args()
     if args.command == "init-db":
         admin.init_db()
@@ -48,6 +55,8 @@ def main() -> None:
         admin.ensure_admin(args)
     elif args.command == "voip-test":
         voip.voip_test(args)
+    elif args.command == "traceroute":
+        traceroute.traceroute_cmd(args)
 
 
 if __name__ == "__main__":

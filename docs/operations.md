@@ -359,6 +359,56 @@ geloggt** und über TLS nur über einen **verifizierten** Kanal gesendet (siehe
 Diagramme (SIP-/TLS-Antwortzeit, Verlust) und Lauf-Historie. Dashboard-Karte
 „VoIP / 3CX", sobald mindestens ein Server konfiguriert ist.
 
+### 7. Traceroute / Pfad-Analyse
+
+Ermittelt den Netzpfad zu einem Ziel inkl. **per-Hop** Loss/Latenz, optionaler
+**Pfad-MTU** zum Ziel und **Geo/ASN** je Hop. Zwei Läufe lassen sich
+gegenüberstellen (z. B. vor/nach einer Routing-Änderung).
+
+**Engine:** bevorzugt `mtr --json` (Paket `mtr-tiny`), Fallback `traceroute`.
+Beide laufen mit dem `CAP_NET_RAW` des Dienstes ohne Root. Modi: `icmp`
+(Standard), `udp`, `tcp` (mit Ziel-Port).
+
+| Endpoint | Auth | Zweck |
+|----------|------|-------|
+| `GET/POST /api/traceroute/targets` | viewer/admin | gespeicherte Ziele (wie Dauerping) |
+| `PATCH/DELETE /api/traceroute/targets/<id>` | admin | ändern/löschen (Zeitplan sofort synchronisiert) |
+| `POST /api/traceroute/run` | admin | Ad-hoc: `{host, mode, tcp_port, queries, max_hops, resolve_geo, measure_mtu}` |
+| `POST /api/traceroute/targets/<id>/run` | admin | Lauf für ein gespeichertes Ziel |
+| `GET /api/traceroute/history` | viewer | Verlauf (`range`, `limit`, `target_id`) |
+| `GET /api/traceroute/<id>` | viewer | Lauf inkl. Hops |
+| `GET /api/traceroute/compare?a=<id>&b=<id>` | viewer | Diff zweier Läufe (Pfadänderung, Δ Latenz) |
+
+Retention: `NETPROBE_TRACEROUTE_RETENTION_DAYS` (90). Obergrenze Hops:
+`NETPROBE_TRACEROUTE_MAX_HOPS_LIMIT` (60). Läufe eines gelöschten Ziels bleiben
+erhalten (lose Referenz, kein Fremdschlüssel).
+
+**Geolocation (Hybrid).** Je Hop-IP:
+
+1. Cache (`geoip_cache`, TTL `NETPROBE_GEOIP_CACHE_DAYS`, Standard 30 Tage).
+2. Lokale MaxMind-DB `GeoLite2-City.mmdb` / `GeoLite2-ASN.mmdb` unter
+   `/var/lib/netprobe/geoip/`, falls vorhanden (`python -m maxminddb`, offline).
+3. Sonst **ip-api.com** Batch-Endpoint über **HTTP** (`NETPROBE_GEOIP_ENDPOINT`),
+   5 s Timeout, Rate-Limit `NETPROBE_GEOIP_ONLINE_RATE_PER_MIN` (40/min, Free-Limit
+   ist 45).
+
+Private/Bogon-IPs (RFC1918, CGNAT 100.64/10, Loopback, Link-Local, Multicast)
+werden **nie** an ip-api.com gesendet. Abschalten: `NETPROBE_GEOIP_ENABLED=false`
+(gar keine Auflösung) bzw. `NETPROBE_GEOIP_ONLINE_ENABLED=false` (nur lokale DB).
+Siehe `docs/security.md` – dies ist die einzige Ausnahme vom „keine Cloud"-Prinzip.
+
+**MaxMind-DBs beziehen:** kostenloses Konto bei MaxMind, Lizenzschlüssel als
+`NETPROBE_MAXMIND_LICENSE_KEY` beim `install.sh`-Lauf setzen (lädt beide DBs),
+oder die `.mmdb`-Dateien manuell nach `/var/lib/netprobe/geoip/` legen
+(`chown netprobe:netprobe`). Ein späteres Auffrischen genügt – der Reader erkennt
+die neue Datei an der mtime.
+
+**CLI:** `python -m app.cli traceroute --target 8.8.8.8 --geo [--mtu] [--mode tcp]`.
+
+**UI:** Seite *Traceroute* – Sofortlauf-Formular, gespeicherte Ziele, Hop-Tabelle
+(IP/Hostname/Land/Stadt/ASN/ISP/Latenz/Loss/MTU), **Weltkarte** (Leaflet +
+OpenStreetMap-Kacheln), Vergleichsansicht und Verlauf.
+
 ## Deinstallation
 
 ```bash

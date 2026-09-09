@@ -17,15 +17,23 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import session_scope
+from app.models.traceroute import TracerouteTarget
 from app.models.voip import VoipServer
 from app.models.wan import WanTarget
-from app.services import kvstore, speedtest_service, voip_service, wan_service
+from app.services import (
+    kvstore,
+    speedtest_service,
+    traceroute_service,
+    voip_service,
+    wan_service,
+)
 from app.workers.aggregation import aggregate_ping_samples, cleanup_retention
 
 log = get_logger("netprobe.scheduler")
 
 WAN_JOB_PREFIX = "wan_target_"
 VOIP_JOB_PREFIX = "voip_server_"
+TRACEROUTE_JOB_PREFIX = "traceroute_target_"
 
 
 class SchedulerService:
@@ -65,6 +73,20 @@ class SchedulerService:
                 if server is None or not server.enabled:
                     return
                 voip_service.run_test(db, server, source="scheduled")
+
+        await asyncio.to_thread(_job)
+
+    async def _scheduled_traceroute(self, target_id: int) -> None:
+        def _job() -> None:
+            with session_scope() as db:
+                target = db.get(TracerouteTarget, target_id)
+                if target is None or not target.enabled:
+                    return
+                traceroute_service.run(
+                    db, host=target.host, mode=target.mode, tcp_port=target.tcp_port,
+                    queries=target.queries, max_hops=target.max_hops,
+                    resolve_geo=target.resolve_geo, source="scheduled", target_id=target.id,
+                )
 
         await asyncio.to_thread(_job)
 
@@ -140,10 +162,36 @@ class SchedulerService:
                 coalesce=True,
             )
 
+    def sync_traceroute_jobs(self) -> None:
+        """Synchronisiert Scheduler-Jobs mit den aktivierten Traceroute-Zielen."""
+        with session_scope() as db:
+            targets = db.query(TracerouteTarget).all()
+            wanted: dict[str, TracerouteTarget] = {
+                f"{TRACEROUTE_JOB_PREFIX}{t.id}": t for t in targets if t.enabled
+            }
+
+        for job in self.scheduler.get_jobs():
+            if job.id.startswith(TRACEROUTE_JOB_PREFIX) and job.id not in wanted:
+                job.remove()
+
+        for job_id, target in wanted.items():
+            existing = self.scheduler.get_job(job_id)
+            if existing:
+                existing.remove()
+            self.scheduler.add_job(
+                self._scheduled_traceroute,
+                IntervalTrigger(seconds=max(60, target.interval_s)),
+                id=job_id,
+                args=[target.id],
+                max_instances=1,
+                coalesce=True,
+            )
+
     def start(self) -> None:
         self.reschedule_speedtest()
         self.sync_wan_jobs()
         self.sync_voip_jobs()
+        self.sync_traceroute_jobs()
         self.scheduler.add_job(
             self._aggregate, IntervalTrigger(minutes=5), id="ping_aggregate", coalesce=True
         )

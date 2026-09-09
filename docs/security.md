@@ -89,12 +89,29 @@ Für den produktiven Betrieb wird **HTTPS** empfohlen:
   einmalig die Handshake-Zeit auch unverifiziert – dabei werden **keine Daten**
   über die Verbindung gesendet; `tls_verified=false` weist im UI darauf hin.
 
+## Traceroute-Geolocation (Ausnahme vom „keine Cloud"-Prinzip)
+
+- Die Geo-/ASN-Auflösung der Traceroute-Hops ist **hybrid**: zuerst eine lokale
+  MaxMind-`.mmdb` (offline), sonst der externe Dienst **ip-api.com** über **HTTP**.
+- Dabei verlassen **öffentliche Hop-IP-Adressen** deines Netzpfads die Appliance.
+  **Private/Bogon-IPs** (RFC1918, CGNAT 100.64/10, Loopback, Link-Local, Multicast)
+  werden **nie** gesendet.
+- Ergebnisse werden lokal gecacht (`geoip_cache`, Standard 30 Tage), sodass die
+  Zahl der Anfragen minimal bleibt; ein In-Memory-Rate-Limit (40/min) verhindert
+  Überschreiten des Free-Limits.
+- Vollständig abschaltbar: `NETPROBE_GEOIP_ENABLED=false` (keine Auflösung) oder
+  `NETPROBE_GEOIP_ONLINE_ENABLED=false` (nur lokale MaxMind-DB, keine ausgehende
+  Verbindung). Ohne Auflösung bleibt der Traceroute voll nutzbar (Hops ohne Geo).
+- Die Weltkarte im UI lädt **OpenStreetMap-Kacheln** direkt im Browser des
+  Betrachters (`tile.openstreetmap.org`).
+
 ## Datenschutz / keine Cloud
 
-- Es werden **keine externen Cloud-Dienste** verwendet und **keine Telemetrie** gesendet.
+- Außer der oben genannten optionalen Geo-Auflösung werden **keine externen
+  Cloud-Dienste** verwendet und **keine Telemetrie** gesendet.
   (Der Speedtest kontaktiert Ookla-Messserver – das ist die eigentliche Messung.
   Der VoIP-Test kontaktiert nur die von dir konfigurierte 3CX-Anlage.)
-- Alle Daten verbleiben lokal in SQLite.
+- Alle Messdaten verbleiben lokal in SQLite.
 
 ## Empfehlungen
 

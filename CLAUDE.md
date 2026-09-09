@@ -155,16 +155,28 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   the request body — **never persisted or logged**; TLS `REGISTER` requires a verified cert).
   Scheduled per server via `scheduler_service.sync_voip_jobs()` (`voip_server_` job prefix).
   Never places a real call.
+- `app/api/traceroute.py` (`/api/traceroute`) + `app/models/traceroute.py` —
+  `traceroute_service.run()` prefers `mtr --json` (`parse_mtr_json`), falls back to
+  `traceroute` text (`parse_traceroute_text`); enriches hops with reverse DNS,
+  optional path-MTU (`mtu_service`), and geo/ASN via `geoip_service.lookup()`.
+  `geoip_service` is **hybrid**: cache (`geoip_cache` table) → local MaxMind `.mmdb`
+  (`maxminddb`, base dep) → ip-api.com HTTP batch (`geoip_online_*` settings,
+  in-memory rate limit). Private/bogon IPs are never sent externally — this is the
+  one documented exception to "no cloud" (`docs/security.md`). Scheduled via
+  `sync_traceroute_jobs()` (`traceroute_target_` prefix). `Traceroute` has no FK to
+  its target (survives target deletion, like `Report`). `compare()` diffs two runs.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
   host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
   inputs. `iperf3` is added to the installer's apt list; the optional
   always-on server unit is `deploy/systemd/netprobe-iperf3.service` (installed disabled).
 - CLI is a package: `app/cli/__init__.py` (`main` dispatcher) + `__main__.py` + per-area
-  modules (`admin.py`, `voip.py`). Entry point stays `app.cli:main`; `python -m app.cli` works.
+  modules (`admin.py`, `voip.py`, `traceroute.py`). Entry point stays `app.cli:main`;
+  `python -m app.cli` works.
 
 ### Frontend (`frontend/src/`)
 Vite + React 19 + react-router 7, ECharts used via the direct API in `components/Chart.tsx`
-(no wrapper lib — needed for React 19). `api.ts` is the single fetch client (`credentials:
+and Leaflet likewise in `components/MapView.tsx` (no wrapper lib — needed for React 19;
+`MapView` loads OpenStreetMap tiles at runtime from the viewer's browser). `api.ts` is the single fetch client (`credentials:
 "include"`); `auth.tsx` holds the auth context; one page component per nav route in `pages/`.
 No test runner configured for the frontend — `npm run lint` / `npm run build` are the gates.
 

@@ -9,6 +9,7 @@ from app.models.ping import PingAggregate, PingJob, PingSample
 from app.models.report import Report
 from app.models.settings import AppSetting
 from app.models.speedtest import SpeedtestResult
+from app.models.traceroute import GeoipCache, Traceroute, TracerouteHop, TracerouteTarget
 from app.models.user import User
 from app.models.voip import VoipServer, VoipTest
 from app.models.wan import WanResult, WanTarget
@@ -18,6 +19,7 @@ __all__ = [
     "AuditLog",
     "Capture",
     "CaptureJob",
+    "GeoipCache",
     "IperfResult",
     "MtuTest",
     "PingAggregate",
@@ -25,6 +27,9 @@ __all__ = [
     "PingSample",
     "Report",
     "SpeedtestResult",
+    "Traceroute",
+    "TracerouteHop",
+    "TracerouteTarget",
     "User",
     "VoipServer",
     "VoipTest",

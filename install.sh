@@ -116,7 +116,7 @@ install_packages() {
         nginx \
         sqlite3 \
         tshark wireshark-common \
-        fping iputils-ping mtr-tiny iperf3 \
+        fping iputils-ping mtr-tiny traceroute iperf3 \
         curl jq tar ca-certificates gnupg lsb-release ssl-cert \
         libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core
 
@@ -267,9 +267,10 @@ setup_user_dirs() {
     # .config/.cache werden von der Ookla Speedtest CLI benötigt, reports/ von der
     # Report-Funktion.
     mkdir -p "$APP_DIR" "$DATA_DIR" "$CAPTURE_DIR" "$LOG_DIR" "$ETC_DIR" \
-             "$DATA_DIR/.config/ookla" "$DATA_DIR/.cache" "$DATA_DIR/reports"
+             "$DATA_DIR/.config/ookla" "$DATA_DIR/.cache" "$DATA_DIR/reports" \
+             "$DATA_DIR/geoip"
     chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$DATA_DIR" "$LOG_DIR"
-    chmod 750 "$DATA_DIR" "$LOG_DIR" "$DATA_DIR/reports"
+    chmod 750 "$DATA_DIR" "$LOG_DIR" "$DATA_DIR/reports" "$DATA_DIR/geoip"
     chmod 700 "$DATA_DIR/.config" "$DATA_DIR/.cache"
 
     # Capture-Verzeichnis: Eigentümer netprobe, Gruppe 'wireshark' (falls vorhanden),
@@ -438,6 +439,32 @@ setup_iperf3_service() {
     fi
     # Den vom iperf3-Paket mitgelieferten Dienst NICHT automatisch starten.
     systemctl disable --now iperf3 >/dev/null 2>&1 || true
+}
+
+setup_geoip() {
+    # Traceroute-Hop-Geolokalisierung ist hybrid: zuerst lokale MaxMind-DB, sonst
+    # ip-api.com (HTTP). Ohne lokale DB funktioniert alles über die Online-Abfrage.
+    # Wenn NETPROBE_MAXMIND_LICENSE_KEY gesetzt ist, werden die GeoLite2-DBs geladen.
+    local geo_dir="$DATA_DIR/geoip"
+    if [ -n "${NETPROBE_MAXMIND_LICENSE_KEY:-}" ]; then
+        local base="https://download.maxmind.com/app/geoip_download"
+        local edition
+        for edition in GeoLite2-City GeoLite2-ASN; do
+            log "Lade ${edition}.mmdb von MaxMind…"
+            if curl -fsSL "${base}?edition_id=${edition}&license_key=${NETPROBE_MAXMIND_LICENSE_KEY}&suffix=tar.gz" \
+                    -o "/tmp/${edition}.tar.gz" 2>/dev/null; then
+                tar -xzf "/tmp/${edition}.tar.gz" -C /tmp
+                find /tmp -name "${edition}.mmdb" -exec cp {} "${geo_dir}/${edition}.mmdb" \; 2>/dev/null || true
+                rm -rf "/tmp/${edition}.tar.gz" "/tmp/${edition}_"* 2>/dev/null || true
+            else
+                warn "${edition} konnte nicht geladen werden (Lizenzschlüssel prüfen)."
+            fi
+        done
+        chown -R "$APP_USER:$APP_GROUP" "$geo_dir"
+        ok "GeoLite2-Datenbanken in ${geo_dir} abgelegt."
+    else
+        ok "Keine lokale GeoIP-DB (NETPROBE_MAXMIND_LICENSE_KEY nicht gesetzt) – Traceroute nutzt ip-api.com."
+    fi
 }
 
 setup_nginx() {
@@ -617,6 +644,7 @@ main() {
     setup_admin
     setup_systemd
     setup_iperf3_service
+    setup_geoip
     setup_nginx
     setup_logrotate
     setup_ufw

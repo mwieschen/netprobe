@@ -27,6 +27,9 @@ durch und ermöglicht sichere Packet Captures mit Basisanalyse – alles lokal,
 - **Langzeit-Captures** – dumpcap-Ringpuffer-Jobs mit Auto-Resume nach Neustart.
 - **iperf3** – verwalteter Server + Client-Tests (TCP/UDP), Durchsatz/Jitter/Verlust.
 - **MTU-Test** – Pfad-MTU-Ermittlung per binärer Suche (`ping -M do`).
+- **Traceroute** – Pfad-Analyse via `mtr`/`traceroute` mit per-Hop Loss/Latenz,
+  optionaler Pfad-MTU, Geo/ASN je Hop (lokale MaxMind-DB oder ip-api.com),
+  Weltkarte (Leaflet/OpenStreetMap) und Vergleich zweier Läufe.
 - **VoIP / 3CX** – SIP-/SIP-TLS-/WebRTC-Erreichbarkeit, SIP-`OPTIONS`-Antwortzeit,
   TLS-Handshake & Zertifikatsablauf, ICMP-Verlust, optionaler Registrierungstest
   (Zugangsdaten werden nicht gespeichert). **Kein Anruf.**

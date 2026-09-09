@@ -392,6 +392,101 @@ class VoipTestRequest(BaseModel):
     password: str | None = Field(default=None, max_length=256)
 
 
+# --- Traceroute / Pfad-Analyse ---
+class TracerouteTargetBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    host: str = Field(min_length=1, max_length=255)
+    mode: str = Field(default="icmp", pattern="^(icmp|udp|tcp)$")
+    tcp_port: int = Field(default=443, ge=1, le=65535)
+    max_hops: int = Field(default=30, ge=1, le=60)
+    queries: int = Field(default=3, ge=1, le=10)
+    resolve_geo: bool = True
+    enabled: bool = True
+    interval_s: int = Field(default=900, ge=60, le=86400)
+
+
+class TracerouteTargetCreate(TracerouteTargetBase):
+    pass
+
+
+class TracerouteTargetUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    host: str | None = Field(default=None, max_length=255)
+    mode: str | None = Field(default=None, pattern="^(icmp|udp|tcp)$")
+    tcp_port: int | None = Field(default=None, ge=1, le=65535)
+    max_hops: int | None = Field(default=None, ge=1, le=60)
+    queries: int | None = Field(default=None, ge=1, le=10)
+    resolve_geo: bool | None = None
+    enabled: bool | None = None
+    interval_s: int | None = Field(default=None, ge=60, le=86400)
+
+
+class TracerouteTargetOut(TracerouteTargetBase):
+    id: int
+    created_at: datetime
+
+
+class TracerouteRunRequest(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    mode: str = Field(default="icmp", pattern="^(icmp|udp|tcp)$")
+    tcp_port: int = Field(default=443, ge=1, le=65535)
+    queries: int = Field(default=3, ge=1, le=10)
+    max_hops: int = Field(default=30, ge=1, le=60)
+    resolve_geo: bool = True
+    measure_mtu: bool = False
+
+
+class TracerouteHopOut(ORMModel):
+    hop_number: int
+    ip: str | None
+    hostname: str | None
+    latency_min_ms: float | None
+    latency_avg_ms: float | None
+    latency_max_ms: float | None
+    loss_pct: float | None
+    sent: int | None
+    mtu: int | None
+    country: str | None
+    city: str | None
+    asn: str | None
+    isp: str | None
+    lat: float | None
+    lon: float | None
+
+
+class TracerouteOut(ORMModel):
+    id: int
+    ts: datetime
+    target_id: int | None
+    target: str
+    source: str
+    mode: str
+    engine: str
+    total_hops: int
+    completed: bool
+    dest_reached: bool
+    avg_latency_ms: float | None
+    total_loss_pct: float | None
+    error: str | None
+    hops: list[TracerouteHopOut] = []
+
+
+class TracerouteListItem(ORMModel):
+    id: int
+    ts: datetime
+    target_id: int | None
+    target: str
+    source: str
+    mode: str
+    engine: str
+    total_hops: int
+    completed: bool
+    dest_reached: bool
+    avg_latency_ms: float | None
+    total_loss_pct: float | None
+    error: str | None
+
+
 # --- Settings ---
 class SettingsOut(BaseModel):
     speedtest_enabled: bool

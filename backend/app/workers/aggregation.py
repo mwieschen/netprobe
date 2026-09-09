@@ -12,6 +12,7 @@ from app.core.timeutils import utcnow
 from app.db.session import session_scope
 from app.models.ping import PingAggregate, PingSample
 from app.models.speedtest import SpeedtestResult
+from app.models.traceroute import GeoipCache, Traceroute
 from app.models.voip import VoipTest
 from app.models.wan import WanResult
 
@@ -87,9 +88,15 @@ def cleanup_retention() -> None:
         voip_cutoff = now - timedelta(days=settings.voip_retention_days)
         n5 = db.query(VoipTest).filter(VoipTest.ts < voip_cutoff).delete()
 
-        if n1 or n2 or n3 or n4 or n5:
+        tr_cutoff = now - timedelta(days=settings.traceroute_retention_days)
+        n6 = db.query(Traceroute).filter(Traceroute.ts < tr_cutoff).delete()
+
+        geo_cutoff = now - timedelta(days=max(180, settings.geoip_cache_days * 4))
+        n7 = db.query(GeoipCache).filter(GeoipCache.fetched_at < geo_cutoff).delete()
+
+        if n1 or n2 or n3 or n4 or n5 or n6 or n7:
             log.info(
                 "Retention: %d Samples, %d Aggregate, %d Speedtests, %d WAN-Ergebnisse, "
-                "%d VoIP-Tests gelöscht",
-                n1, n2, n3, n4, n5,
+                "%d VoIP-Tests, %d Traceroutes, %d Geo-Cache-Einträge gelöscht",
+                n1, n2, n3, n4, n5, n6, n7,
             )

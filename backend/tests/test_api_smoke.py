@@ -216,6 +216,52 @@ def test_voip_servers_require_auth(client):
     assert client.post("/api/voip/servers", json={"name": "x", "host": "y"}).status_code == 401
 
 
+def test_traceroute_target_crud(admin):
+    resp = admin.post(
+        "/api/traceroute/targets",
+        json={"name": "Google DNS", "host": "8.8.8.8", "mode": "icmp"},
+    )
+    assert resp.status_code == 201, resp.text
+    target_id = resp.json()["id"]
+
+    resp = admin.get("/api/traceroute/targets")
+    assert any(t["id"] == target_id for t in resp.json())
+
+    resp = admin.patch(f"/api/traceroute/targets/{target_id}", json={"enabled": False, "queries": 5})
+    assert resp.status_code == 200
+    assert resp.json()["queries"] == 5
+
+    resp = admin.delete(f"/api/traceroute/targets/{target_id}")
+    assert resp.status_code == 204
+
+
+def test_traceroute_run_without_tool(admin):
+    # In der Testumgebung ist weder mtr noch traceroute vorhanden -> Lauf wird
+    # persistiert, completed=False, error gesetzt, aber sauberes 201.
+    resp = admin.post("/api/traceroute/run", json={"host": "8.8.8.8", "resolve_geo": False})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["target"] == "8.8.8.8"
+    assert isinstance(body["hops"], list)
+    assert "id" in body
+
+    resp = admin.get("/api/traceroute/history")
+    assert any(t["id"] == body["id"] for t in resp.json())
+
+    resp = admin.get(f"/api/traceroute/{body['id']}")
+    assert resp.status_code == 200
+
+
+def test_traceroute_run_rejects_bad_host(admin):
+    resp = admin.post("/api/traceroute/run", json={"host": "-x", "resolve_geo": False})
+    assert resp.status_code == 201
+    assert "Ungültiger Host" in (resp.json()["error"] or "")
+
+
+def test_traceroute_compare_missing(admin):
+    assert admin.get("/api/traceroute/compare?a=99998&b=99999").status_code == 404
+
+
 def test_openapi_available(client):
     resp = client.get("/api/openapi.json")
     assert resp.status_code == 200

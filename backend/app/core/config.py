@@ -85,6 +85,23 @@ class Settings(BaseSettings):
     # --- VoIP / 3CX ---
     voip_retention_days: int = 365
 
+    # --- Traceroute / Geolocation ---
+    mtr_bin: str = "mtr"
+    traceroute_bin: str = "traceroute"
+    traceroute_retention_days: int = 90
+    traceroute_max_hops_limit: int = 60
+    traceroute_timeout_s: int = 120
+    # Geo/ASN-Auflösung der Hops. Hybrid: erst lokale MaxMind-DB, dann – falls
+    # aktiviert – ip-api.com (HTTP). Bei Deaktivierung bleiben die Hops ohne Geo.
+    geoip_enabled: bool = True
+    geoip_online_enabled: bool = True
+    geoip_db_city: Path = Path("/var/lib/netprobe/geoip/GeoLite2-City.mmdb")
+    geoip_db_asn: Path = Path("/var/lib/netprobe/geoip/GeoLite2-ASN.mmdb")
+    geoip_endpoint: str = "http://ip-api.com/batch"
+    geoip_cache_days: int = 30
+    # Obergrenze ip-api.com Free: 45 Anfragen/Minute.
+    geoip_online_rate_per_min: int = 40
+
     # --- Retention ---
     ping_raw_retention_days: int = 14
     ping_agg_retention_days: int = 365

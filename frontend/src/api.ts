@@ -321,6 +321,76 @@ export interface VoipServer {
   last_test: VoipTest | null;
 }
 
+export interface TracerouteTarget {
+  id: number;
+  name: string;
+  host: string;
+  mode: "icmp" | "udp" | "tcp";
+  tcp_port: number;
+  max_hops: number;
+  queries: number;
+  resolve_geo: boolean;
+  enabled: boolean;
+  interval_s: number;
+  created_at: string;
+}
+
+export interface TracerouteHop {
+  hop_number: number;
+  ip: string | null;
+  hostname: string | null;
+  latency_min_ms: number | null;
+  latency_avg_ms: number | null;
+  latency_max_ms: number | null;
+  loss_pct: number | null;
+  sent: number | null;
+  mtu: number | null;
+  country: string | null;
+  city: string | null;
+  asn: string | null;
+  isp: string | null;
+  lat: number | null;
+  lon: number | null;
+}
+
+export interface Traceroute {
+  id: number;
+  ts: string;
+  target_id: number | null;
+  target: string;
+  source: string;
+  mode: string;
+  engine: string;
+  total_hops: number;
+  completed: boolean;
+  dest_reached: boolean;
+  avg_latency_ms: number | null;
+  total_loss_pct: number | null;
+  error: string | null;
+  hops: TracerouteHop[];
+}
+
+export type TracerouteListItem = Omit<Traceroute, "hops">;
+
+export interface TracerouteCompareRow {
+  hop_number: number;
+  ip_a: string | null;
+  ip_b: string | null;
+  hostname_a: string | null;
+  hostname_b: string | null;
+  latency_avg_a: number | null;
+  latency_avg_b: number | null;
+  delta_ms: number | null;
+  changed: boolean;
+}
+
+export interface TracerouteCompare {
+  a: { id: number; ts: string; target: string };
+  b: { id: number; ts: string; target: string };
+  rows: TracerouteCompareRow[];
+  path_changed: boolean;
+}
+
 export interface KeyMetric {
   label: string;
   value: string;
