@@ -344,7 +344,7 @@ hartes Kriterium.
 | `GET /api/voip/servers/<id>/history` | viewer | `range=24h\|7d\|30d\|all` |
 | `GET /api/voip/history` | viewer | letzte Läufe über alle Server (Dashboard) |
 | `GET /api/voip/interfaces` | admin | Capture-Interfaces (`dumpcap -D`) für den Mitschnitt |
-| `GET /api/voip/tests/<id>/capture` | viewer | PCAP-Mitschnitt eines Tests herunterladen |
+| `GET /api/voip/tests/<id>/capture` | **admin** | Roh-PCAP eines Tests herunterladen (kann Gesprächsdaten enthalten; jeder Download wird auditiert). Viewer sehen nur die JSON-Analyse. |
 | `POST /api/voip/analyze` | admin | vorhandene Capture (`{capture_id}` oder `{capture_path}`) auf SIP/SDP/RTP analysieren – nicht persistiert |
 
 Der Scheduler misst jeden aktivierten Server im Intervall `interval_s` (min. 60 s).

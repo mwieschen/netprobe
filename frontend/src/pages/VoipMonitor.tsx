@@ -299,6 +299,7 @@ export default function VoipMonitorPage() {
 }
 
 function LastTestCard({ test }: { test: VoipTest }) {
+  const { isAdmin } = useAuth();
   const webrtc = test.webrtc_results
     .map((w) => `${w.port}: ${w.ok ? "ok" : "zu"}`)
     .join(", ");
@@ -358,13 +359,16 @@ function LastTestCard({ test }: { test: VoipTest }) {
                   : "–"}
               </td>
             </tr>
-            {test.capture_url && (
+            {test.capture_url && isAdmin && (
               <tr>
                 <td>Mitschnitt</td>
                 <td>
                   <a href={test.capture_url} className="badge dim">
                     PCAP herunterladen
-                  </a>
+                  </a>{" "}
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    (nur Admin – kann Gesprächsdaten enthalten)
+                  </span>
                 </td>
               </tr>
             )}

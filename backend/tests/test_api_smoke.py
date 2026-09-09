@@ -258,6 +258,11 @@ def test_voip_capture_download_404_without_capture(admin):
     admin.delete(f"/api/voip/servers/{server_id}")
 
 
+def test_voip_capture_download_is_admin_only(client, admin):
+    client.cookies.clear()
+    assert client.get("/api/voip/tests/1/capture").status_code == 401
+
+
 def test_traceroute_target_crud(admin):
     resp = admin.post(
         "/api/traceroute/targets",

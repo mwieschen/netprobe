@@ -88,8 +88,10 @@ Für den produktiven Betrieb wird **HTTPS** empfohlen:
 - Der optionale **PCAP-Mitschnitt** eines VoIP-Tests nutzt `dumpcap` mit einem fest
   auf SIP-Ports gesetzten BPF-Filter und schreibt nach `<capture_dir>/voip/`
   (außerhalb des Webroots, gleiche Rechte wie normale Captures). Er kann – abhängig
-  vom Interface – vertraulichen Gesprächsverkehr enthalten; Download nur für
-  angemeldete Nutzer, Pfad gegen `capture_dir` geprüft. Mitschnitte werden mit dem
+  vom Interface – vertraulichen Gesprächsverkehr enthalten. Der Roh-PCAP-Download
+  (`GET /api/voip/tests/<id>/capture`) ist **admin-only** und wird im Audit-Log
+  vermerkt; Viewer sehen ausschließlich die aggregierte JSON-Analyse. Pfad gegen
+  `capture_dir` geprüft, Auslieferung als `attachment`. Mitschnitte werden mit dem
   zugehörigen Test-Datensatz nach `NETPROBE_VOIP_RETENTION_DAYS` gelöscht.
 - `POST /api/voip/analyze` akzeptiert nur Pfade **innerhalb** von `capture_dir`
   (`relative_to`-Prüfung), keine beliebigen Dateien.

@@ -241,9 +241,13 @@ async def analyze_capture(
 @router.get("/tests/{test_id}/capture")
 def download_capture(
     test_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
 ):
+    """Roh-PCAP eines VoIP-Test-Mitschnitts. **Nur Admin** – der Mitschnitt kann
+    Gesprächsaudio und SIP-Auth-Material enthalten (Viewer sehen nur die
+    aggregierte JSON-Analyse in ``VoipTestOut``)."""
     test = db.get(VoipTest, test_id)
     if test is None or not test.capture_path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Kein Mitschnitt für diesen Test.")
@@ -254,7 +258,15 @@ def download_capture(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Ungültiger Capture-Pfad.") from exc
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Mitschnitt-Datei fehlt.")
-    return FileResponse(path, media_type="application/vnd.tcpdump.pcap", filename=path.name)
+    audit.record(db, "voip_capture_download", user_id=user.id, username=user.username,
+                 detail=str(test_id), ip=client_ip(request))
+    db.commit()
+    return FileResponse(
+        path,
+        media_type="application/vnd.tcpdump.pcap",
+        filename=path.name,
+        content_disposition_type="attachment",
+    )
 
 
 @router.get("/servers/{server_id}/history", response_model=list[VoipTestOut])
