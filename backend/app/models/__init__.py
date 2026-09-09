@@ -3,6 +3,7 @@
 from app.models.audit import AuditLog
 from app.models.capture import Capture
 from app.models.capture_job import CaptureJob
+from app.models.health_check import HealthCheckResult, HealthProbe
 from app.models.iperf import IperfResult
 from app.models.mtu import MtuTest
 from app.models.ping import PingAggregate, PingJob, PingSample
@@ -20,6 +21,8 @@ __all__ = [
     "Capture",
     "CaptureJob",
     "GeoipCache",
+    "HealthCheckResult",
+    "HealthProbe",
     "IperfResult",
     "MtuTest",
     "PingAggregate",

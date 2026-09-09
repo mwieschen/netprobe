@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from app.cli import admin, traceroute, voip
+from app.cli import admin, health, traceroute, voip
 
 
 def main() -> None:
@@ -46,6 +46,15 @@ def main() -> None:
     p_tr.add_argument("--mtu", action="store_true", help="Pfad-MTU zum Ziel messen")
     p_tr.add_argument("--json", action="store_true", help="Ergebnis als JSON ausgeben")
 
+    p_dns = sub.add_parser("dns-test", help="DNS-Auflösung testen")
+    p_dns.add_argument("--domain", required=True)
+    p_dns.add_argument("--server", help="DNS-Server (Standard: System-Resolver)")
+    p_dns.add_argument("--type", default="A", help="Record-Typ (A, AAAA, MX, TXT, …)")
+    p_dns.add_argument("--json", action="store_true")
+
+    p_hc = sub.add_parser("health-check", help="Konfigurierte Health-Probes ausführen")
+    p_hc.add_argument("--all", action="store_true", help="auch deaktivierte Probes")
+
     args = parser.parse_args()
     if args.command == "init-db":
         admin.init_db()
@@ -57,6 +66,10 @@ def main() -> None:
         voip.voip_test(args)
     elif args.command == "traceroute":
         traceroute.traceroute_cmd(args)
+    elif args.command == "dns-test":
+        health.dns_test(args)
+    elif args.command == "health-check":
+        health.health_check(args)
 
 
 if __name__ == "__main__":

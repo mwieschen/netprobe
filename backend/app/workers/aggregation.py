@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.timeutils import utcnow
 from app.db.session import session_scope
+from app.models.health_check import HealthCheckResult
 from app.models.ping import PingAggregate, PingSample
 from app.models.speedtest import SpeedtestResult
 from app.models.traceroute import GeoipCache, Traceroute
@@ -94,9 +95,12 @@ def cleanup_retention() -> None:
         geo_cutoff = now - timedelta(days=max(180, settings.geoip_cache_days * 4))
         n7 = db.query(GeoipCache).filter(GeoipCache.fetched_at < geo_cutoff).delete()
 
-        if n1 or n2 or n3 or n4 or n5 or n6 or n7:
+        hc_cutoff = now - timedelta(days=settings.health_check_retention_days)
+        n8 = db.query(HealthCheckResult).filter(HealthCheckResult.ts < hc_cutoff).delete()
+
+        if n1 or n2 or n3 or n4 or n5 or n6 or n7 or n8:
             log.info(
                 "Retention: %d Samples, %d Aggregate, %d Speedtests, %d WAN-Ergebnisse, "
-                "%d VoIP-Tests, %d Traceroutes, %d Geo-Cache-Einträge gelöscht",
-                n1, n2, n3, n4, n5, n6, n7,
+                "%d VoIP-Tests, %d Traceroutes, %d Geo-Cache-Einträge, %d Health-Ergebnisse gelöscht",
+                n1, n2, n3, n4, n5, n6, n7, n8,
             )

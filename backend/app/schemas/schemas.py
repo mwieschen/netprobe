@@ -487,6 +487,46 @@ class TracerouteListItem(ORMModel):
     error: str | None
 
 
+# --- System-Health-Checks ---
+class HealthProbeBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    check_type: str = Field(pattern="^(dns|http|smtp|imap|ntp)$")
+    target: str = Field(min_length=1, max_length=255)
+    params: dict = Field(default_factory=dict)
+    enabled: bool = True
+    interval_s: int = Field(default=300, ge=60, le=86400)
+
+
+class HealthProbeCreate(HealthProbeBase):
+    pass
+
+
+class HealthProbeUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    target: str | None = Field(default=None, max_length=255)
+    params: dict | None = None
+    enabled: bool | None = None
+    interval_s: int | None = Field(default=None, ge=60, le=86400)
+
+
+class HealthCheckResultOut(ORMModel):
+    id: int
+    probe_id: int
+    ts: datetime
+    ok: bool
+    source: str
+    response_ms: float | None
+    status: str | None
+    details: dict = {}
+    error: str | None
+
+
+class HealthProbeOut(HealthProbeBase):
+    id: int
+    created_at: datetime
+    last_result: HealthCheckResultOut | None = None
+
+
 # --- Settings ---
 class SettingsOut(BaseModel):
     speedtest_enabled: bool

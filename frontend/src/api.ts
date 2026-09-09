@@ -391,6 +391,32 @@ export interface TracerouteCompare {
   path_changed: boolean;
 }
 
+export type HealthCheckType = "dns" | "http" | "smtp" | "imap" | "ntp";
+
+export interface HealthCheckResult {
+  id: number;
+  probe_id: number;
+  ts: string;
+  ok: boolean;
+  source: string;
+  response_ms: number | null;
+  status: string | null;
+  details: Record<string, unknown>;
+  error: string | null;
+}
+
+export interface HealthProbe {
+  id: number;
+  name: string;
+  check_type: HealthCheckType;
+  target: string;
+  params: Record<string, unknown>;
+  enabled: boolean;
+  interval_s: number;
+  created_at: string;
+  last_result: HealthCheckResult | null;
+}
+
 export interface KeyMetric {
   label: string;
   value: string;

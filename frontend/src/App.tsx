@@ -12,6 +12,7 @@ import Iperf3Page from "./pages/Iperf3";
 import MtuTestPage from "./pages/MtuTest";
 import VoipMonitorPage from "./pages/VoipMonitor";
 import TraceroutePage from "./pages/Traceroute";
+import HealthChecksPage from "./pages/HealthChecks";
 import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 
@@ -26,6 +27,7 @@ const NAV = [
   { to: "/mtu-test", label: "MTU-Test" },
   { to: "/voip-monitor", label: "VoIP / 3CX" },
   { to: "/traceroute", label: "Traceroute" },
+  { to: "/health-checks", label: "System Health" },
   { to: "/settings", label: "Einstellungen" },
   { to: "/users", label: "Benutzer" },
 ];
@@ -70,6 +72,7 @@ export default function App() {
           <Route path="/mtu-test" element={<MtuTestPage />} />
           <Route path="/voip-monitor" element={<VoipMonitorPage />} />
           <Route path="/traceroute" element={<TraceroutePage />} />
+          <Route path="/health-checks" element={<HealthChecksPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

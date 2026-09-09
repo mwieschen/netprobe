@@ -165,13 +165,21 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   one documented exception to "no cloud" (`docs/security.md`). Scheduled via
   `sync_traceroute_jobs()` (`traceroute_target_` prefix). `Traceroute` has no FK to
   its target (survives target deletion, like `Report`). `compare()` diffs two runs.
+- `app/api/health_checks.py` (`/api/health-checks`) + `app/models/health_check.py` —
+  a small probe framework in `app/services/health/` (`__init__.py` holds the
+  `register()`/`run_check()`/`run_probe()` registry; submodules `dns`, `http`,
+  `smtp_imap`, `ntp` self-register on import). All checks are **stdlib only**
+  (hand-rolled DNS query, SNTP packet, `smtplib`/`imaplib` handshake — never a
+  login), each returns a `HealthOutcome`. `HealthProbe.params_json` carries
+  type-specific params. Scheduled via `sync_health_jobs()` (`health_probe_` prefix).
+  CLI: `dns-test`, `health-check`.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
   host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
   inputs. `iperf3` is added to the installer's apt list; the optional
   always-on server unit is `deploy/systemd/netprobe-iperf3.service` (installed disabled).
 - CLI is a package: `app/cli/__init__.py` (`main` dispatcher) + `__main__.py` + per-area
-  modules (`admin.py`, `voip.py`, `traceroute.py`). Entry point stays `app.cli:main`;
-  `python -m app.cli` works.
+  modules (`admin.py`, `voip.py`, `traceroute.py`, `health.py`). Entry point stays
+  `app.cli:main`; `python -m app.cli` works.
 
 ### Frontend (`frontend/src/`)
 Vite + React 19 + react-router 7, ECharts used via the direct API in `components/Chart.tsx`

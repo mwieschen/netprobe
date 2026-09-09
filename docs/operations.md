@@ -409,6 +409,38 @@ die neue Datei an der mtime.
 (IP/Hostname/Land/Stadt/ASN/ISP/Latenz/Loss/MTU), **Weltkarte** (Leaflet +
 OpenStreetMap-Kacheln), Vergleichsansicht und Verlauf.
 
+### 8. System-Health-Checks (DNS / HTTP(S) / SMTP / IMAP / NTP)
+
+Konfigurierbare „Probes" mit typ­spezifischen Parametern, periodisch über den
+Scheduler ausgeführt, mit Historie. Alle Prüfungen nutzen die Standardbibliothek
+(kein zusätzliches Tool/Paket), hartes Timeout je Prüfung.
+
+| Typ | Parameter (`params`) | Prüft |
+|-----|----------------------|-------|
+| `dns` | `record_type` (A/AAAA/MX/TXT/CNAME/NS), `servers` (Liste, `""` = System-Resolver), `expected` | Auflösung + Antwortzeit je Server; handgebauter DNS-Query pro Server |
+| `http` | `method`, `expect_status`, `expect_substring`, `verify_tls`, `cert_warn_days` (21) | Statuscode, Laufzeit, Body-Text, TLS-Zertifikatsablauf |
+| `smtp` | `port` (25/587/465), `starttls` | Connect + `EHLO`, STARTTLS-Fähigkeit/-Handshake, Cert-Ablauf. **Kein Login.** |
+| `imap` | `port` (143/993), `starttls` | Connect + `CAPABILITY`, STARTTLS. **Kein Login.** |
+| `ntp` | `max_offset_ms` (1000) | SNTP-Request: Offset, Round-Trip, Stratum, Root-Delay/-Dispersion |
+
+| Endpoint | Auth | Zweck |
+|----------|------|-------|
+| `GET /api/health-checks/types` | viewer | verfügbare Prüftypen |
+| `GET/POST /api/health-checks` | viewer/admin | Probes (mit letztem Ergebnis) |
+| `PATCH/DELETE /api/health-checks/<id>` | admin | ändern/löschen (Zeitplan sofort synchronisiert) |
+| `POST /api/health-checks/<id>/run` | admin | Ad-hoc-Lauf |
+| `GET /api/health-checks/<id>/history` | viewer | Verlauf (`range`, `limit`) |
+| `GET /api/health-checks/overview` | viewer | Sammelstatus (ok/fail/pending) für das Dashboard-Widget |
+
+Retention: `NETPROBE_HEALTH_CHECK_RETENTION_DAYS` (90).
+
+**CLI:** `python -m app.cli dns-test --domain example.com --server 8.8.8.8 --type MX`
+· `python -m app.cli health-check --all`.
+
+**UI:** Seite *System Health* – nach Typ gruppierte Probe-Listen mit Ampel,
+„Jetzt"-Button, Antwortzeit-Verlauf und typ­spezifischem Konfigurationsformular.
+Dashboard-Kachel „System Health" (ok/Fehler, Namen der fehlschlagenden Prüfungen).
+
 ## Deinstallation
 
 ```bash

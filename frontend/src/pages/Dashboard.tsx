@@ -26,6 +26,12 @@ interface Summary {
     loss_pct: number | null;
     ts: string | null;
   }[];
+  health_checks: {
+    ok: number;
+    fail: number;
+    pending: number;
+    failing: { name: string; check_type: string; status: string | null; error: string | null }[];
+  };
   active_ping_jobs: number;
   disruptions_24h: number;
 }
@@ -76,6 +82,28 @@ export default function Dashboard() {
           label="Störungen (24h)"
           value={summary?.disruptions_24h ?? 0}
           sub="WAN-Ausfälle/Timeouts"
+        />
+        <StatCard
+          label="System Health"
+          value={
+            <Badge
+              ok={
+                summary
+                  ? summary.health_checks.fail === 0 && summary.health_checks.ok + summary.health_checks.pending > 0
+                  : null
+              }
+              label={
+                summary
+                  ? `${summary.health_checks.ok} ok / ${summary.health_checks.fail} Fehler`
+                  : "…"
+              }
+            />
+          }
+          sub={
+            summary?.health_checks.failing.length
+              ? summary.health_checks.failing.map((f) => f.name).join(", ")
+              : `${summary?.health_checks.pending ?? 0} ausstehend`
+          }
         />
       </div>
 

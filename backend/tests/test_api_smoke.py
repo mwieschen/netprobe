@@ -262,6 +262,51 @@ def test_traceroute_compare_missing(admin):
     assert admin.get("/api/traceroute/compare?a=99998&b=99999").status_code == 404
 
 
+def test_health_check_types(admin):
+    resp = admin.get("/api/health-checks/types")
+    assert resp.status_code == 200
+    assert set(resp.json()) == {"dns", "http", "smtp", "imap", "ntp"}
+
+
+def test_health_probe_crud_and_run(admin):
+    resp = admin.post(
+        "/api/health-checks",
+        json={
+            "name": "DNS Cloudflare", "check_type": "dns", "target": "example.com",
+            "params": {"record_type": "A", "servers": ["127.0.0.1"]},
+            "interval_s": 300,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    probe_id = resp.json()["id"]
+    assert resp.json()["params"]["record_type"] == "A"
+    assert resp.json()["last_result"] is None
+
+    resp = admin.patch(f"/api/health-checks/{probe_id}", json={"params": {"record_type": "AAAA"}})
+    assert resp.json()["params"]["record_type"] == "AAAA"
+
+    # Lauf: 127.0.0.1:53 antwortet in der Testumgebung nicht -> ok=False, kein Crash
+    resp = admin.post(f"/api/health-checks/{probe_id}/run")
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["probe_id"] == probe_id
+
+    resp = admin.get(f"/api/health-checks/{probe_id}/history")
+    assert len(resp.json()) == 1
+
+    resp = admin.get("/api/health-checks/overview")
+    assert resp.json()["total"] >= 1
+
+    assert admin.delete(f"/api/health-checks/{probe_id}").status_code == 204
+
+
+def test_health_probe_rejects_bad_type(admin):
+    resp = admin.post(
+        "/api/health-checks",
+        json={"name": "x", "check_type": "telnet", "target": "y"},
+    )
+    assert resp.status_code == 422
+
+
 def test_openapi_available(client):
     resp = client.get("/api/openapi.json")
     assert resp.status_code == 200

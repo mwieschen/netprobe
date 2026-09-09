@@ -30,6 +30,9 @@ durch und ermöglicht sichere Packet Captures mit Basisanalyse – alles lokal,
 - **Traceroute** – Pfad-Analyse via `mtr`/`traceroute` mit per-Hop Loss/Latenz,
   optionaler Pfad-MTU, Geo/ASN je Hop (lokale MaxMind-DB oder ip-api.com),
   Weltkarte (Leaflet/OpenStreetMap) und Vergleich zweier Läufe.
+- **System-Health-Checks** – konfigurierbare Probes für DNS, HTTP(S) (inkl.
+  Zertifikatslaufzeit), SMTP/IMAP (STARTTLS-Handshake, kein Login) und NTP
+  (Zeitabweichung/Stratum), periodisch mit Historie und Dashboard-Übersicht.
 - **VoIP / 3CX** – SIP-/SIP-TLS-/WebRTC-Erreichbarkeit, SIP-`OPTIONS`-Antwortzeit,
   TLS-Handshake & Zertifikatsablauf, ICMP-Verlust, optionaler Registrierungstest
   (Zugangsdaten werden nicht gespeichert). **Kein Anruf.**

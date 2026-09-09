@@ -13,6 +13,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.timeutils import utcnow
 from app.db.session import get_db
+from app.models.health_check import HealthCheckResult, HealthProbe
 from app.models.ping import PingJob
 from app.models.speedtest import SpeedtestResult
 from app.models.user import User
@@ -120,6 +121,26 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(get_curre
             }
         )
 
+    # System-Health-Checks: aktueller Stand je Probe (ok/fail/pending)
+    health_probes = db.execute(select(HealthProbe)).scalars().all()
+    hc_ok = hc_fail = hc_pending = 0
+    hc_failing: list[dict] = []
+    for hp in health_probes:
+        hc_last = db.execute(
+            select(HealthCheckResult)
+            .where(HealthCheckResult.probe_id == hp.id)
+            .order_by(HealthCheckResult.ts.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if hc_last is None:
+            hc_pending += 1
+        elif hc_last.ok:
+            hc_ok += 1
+        else:
+            hc_fail += 1
+            hc_failing.append({"name": hp.name, "check_type": hp.check_type,
+                               "status": hc_last.status, "error": hc_last.error})
+
     since = utcnow() - timedelta(hours=24)
     disruptions = db.execute(
         select(func.count()).select_from(WanResult).where(WanResult.ok == False, WanResult.ts >= since)  # noqa: E712
@@ -133,6 +154,9 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(get_curre
         else None,
         "wan_current": wan_current,
         "voip_current": voip_current,
+        "health_checks": {
+            "ok": hc_ok, "fail": hc_fail, "pending": hc_pending, "failing": hc_failing,
+        },
         "active_ping_jobs": active_pings,
         "disruptions_24h": disruptions or 0,
     }

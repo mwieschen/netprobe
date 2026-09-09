@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     # --- VoIP / 3CX ---
     voip_retention_days: int = 365
 
+    # --- System-Health-Checks ---
+    health_check_retention_days: int = 90
+
     # --- Traceroute / Geolocation ---
     mtr_bin: str = "mtr"
     traceroute_bin: str = "traceroute"
