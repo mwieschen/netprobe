@@ -37,7 +37,13 @@ def main() -> None:
     p_voip.add_argument(
         "--transport", choices=("udp", "tcp"), default="udp", help="Transport für den OPTIONS-Ping"
     )
+    p_voip.add_argument("--capture-interface", help="Interface für einen parallelen PCAP-Mitschnitt")
+    p_voip.add_argument("--capture-duration", type=int, default=10, help="Mitschnitt-Dauer (s)")
     p_voip.add_argument("--json", action="store_true", help="Ergebnis als JSON ausgeben")
+
+    p_va = sub.add_parser("voip-analyze", help="Vorhandene PCAP auf SIP/SDP/RTP analysieren")
+    p_va.add_argument("--capture-file", required=True, help="Pfad zur .pcap/.pcapng (unter capture_dir)")
+    p_va.add_argument("--json", action="store_true")
 
     p_tr = sub.add_parser("traceroute", help="Einmalige Pfad-Analyse (mtr/traceroute)")
     p_tr.add_argument("--target", required=True, help="FQDN oder IP des Ziels")
@@ -64,6 +70,8 @@ def main() -> None:
         admin.ensure_admin(args)
     elif args.command == "voip-test":
         voip.voip_test(args)
+    elif args.command == "voip-analyze":
+        voip.voip_analyze(args)
     elif args.command == "traceroute":
         traceroute.traceroute_cmd(args)
     elif args.command == "dns-test":

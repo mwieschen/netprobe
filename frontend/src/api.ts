@@ -303,7 +303,77 @@ export interface VoipTest {
   rtt_avg_ms: number | null;
   registration_ok: boolean | null;
   registration_detail: string | null;
+  server_header: string | null;
+  supported_methods: string | null;
+  tls_version: string | null;
+  tls_cipher: string | null;
+  cert_subject: string | null;
+  cert_issuer: string | null;
+  capture_path: string | null;
+  capture_url: string | null;
+  sip_analysis: VoipSipAnalysis;
+  codec_analysis: VoipCodecAnalysis;
+  rtp_analysis: VoipRtpAnalysis;
   error: string | null;
+}
+
+export interface VoipSipAnalysis {
+  messages_captured?: number;
+  by_method?: Record<string, number>;
+  by_status_class?: Record<string, number>;
+  errors?: { code: number; reason: string; ts: string; src: string; dst: string }[];
+  error_count?: number;
+  retransmissions?: number;
+  dialogs?: { call_id: string; methods: string[]; cseq_ok: boolean }[];
+  server_headers?: string[];
+  allow_methods?: string[];
+  media_types?: string[];
+  secure_rtp?: boolean;
+}
+
+export interface VoipCodecAnalysis {
+  codecs_offered?: string[];
+  primary_codec?: string | null;
+  estimated_bandwidth_kbit?: number | null;
+  ptime_ms?: number | null;
+  secure?: boolean;
+  directions?: string[];
+}
+
+export interface VoipRtpStream {
+  ssrc: string;
+  payload_type: string;
+  codec: string;
+  src: string;
+  dst: string;
+  packets: number;
+  lost: number;
+  lost_pct: number;
+  max_jitter_ms: number;
+  mean_jitter_ms: number;
+  problems: string | null;
+}
+
+export interface VoipRtpAnalysis {
+  streams_detected?: number;
+  jitter_estimate_ms?: number | null;
+  packet_loss_percent?: number | null;
+  payload_types?: string[];
+  total_packets?: number;
+  streams?: VoipRtpStream[];
+}
+
+export interface VoipAnalysis {
+  sip: VoipSipAnalysis;
+  codecs: VoipCodecAnalysis;
+  rtp: VoipRtpAnalysis;
+  error: string | null;
+}
+
+export interface CaptureInterface {
+  index: number;
+  name: string;
+  description: string | null;
 }
 
 export interface VoipServer {

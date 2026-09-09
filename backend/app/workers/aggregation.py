@@ -72,6 +72,33 @@ def aggregate_ping_samples() -> None:
                 log.info("Job %s: %d Buckets aggregiert", job_id, len(buckets))
 
 
+def _unlink_quiet(path_str: str | None) -> None:
+    if not path_str:
+        return
+    try:
+        from pathlib import Path
+
+        Path(path_str).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _prune_voip_captures(cutoff) -> None:
+    """Entfernt verwaiste VoIP-Mitschnitte, die älter als der Cutoff sind."""
+    from pathlib import Path
+
+    voip_dir = Path(settings.capture_dir) / "voip"
+    if not voip_dir.is_dir():
+        return
+    cutoff_ts = cutoff.timestamp()
+    for f in voip_dir.glob("voiptest_*.pcapng"):
+        try:
+            if f.stat().st_mtime < cutoff_ts:
+                f.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def cleanup_retention() -> None:
     """Löscht abgelaufene Rohdaten gemäß Retention-Konfiguration."""
     now = utcnow()
@@ -87,7 +114,13 @@ def cleanup_retention() -> None:
         n4 = db.query(WanResult).filter(WanResult.ts < res_cutoff).delete()
 
         voip_cutoff = now - timedelta(days=settings.voip_retention_days)
+        # Mitschnitt-Dateien der abgelaufenen VoIP-Tests vor dem Löschen entfernen.
+        for (cap_path,) in db.query(VoipTest.capture_path).filter(
+            VoipTest.ts < voip_cutoff, VoipTest.capture_path.is_not(None)
+        ):
+            _unlink_quiet(cap_path)
         n5 = db.query(VoipTest).filter(VoipTest.ts < voip_cutoff).delete()
+        _prune_voip_captures(voip_cutoff)
 
         tr_cutoff = now - timedelta(days=settings.traceroute_retention_days)
         n6 = db.query(Traceroute).filter(Traceroute.ts < tr_cutoff).delete()

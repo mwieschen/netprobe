@@ -1,9 +1,23 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, VoipServer, VoipTest } from "../api";
+import {
+  api,
+  ApiError,
+  CaptureInterface,
+  VoipAnalysis,
+  VoipServer,
+  VoipTest,
+} from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
 import { Badge, ErrorBox, Modal, RangeSelect } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
+
+interface TestOptions {
+  username?: string;
+  password?: string;
+  capture_interface?: string;
+  capture_duration_s?: number;
+}
 
 const RANGES = [
   { value: "24h", label: "24 Stunden" },
@@ -60,11 +74,11 @@ export default function VoipMonitorPage() {
     loadServers();
   }
 
-  async function runTest(server: VoipServer, creds?: { username: string; password: string }) {
+  async function runTest(server: VoipServer, opts: TestOptions) {
     setBusy(server.id);
     setError(null);
     try {
-      await api.post<VoipTest>(`/api/voip/servers/${server.id}/test`, creds ?? {});
+      await api.post<VoipTest>(`/api/voip/servers/${server.id}/test`, opts);
       reload();
     } catch (err) {
       setError((err as ApiError).detail);
@@ -72,11 +86,6 @@ export default function VoipMonitorPage() {
       setBusy(null);
       setTestFor(null);
     }
-  }
-
-  function onTestClick(server: VoipServer) {
-    if (server.check_registration) setTestFor(server);
-    else runTest(server);
   }
 
   const ordered = [...history].reverse();
@@ -144,7 +153,7 @@ export default function VoipMonitorPage() {
                   <td className="num" onClick={(e) => e.stopPropagation()}>
                     {isAdmin && (
                       <div className="row" style={{ justifyContent: "flex-end" }}>
-                        <button disabled={busy === s.id} onClick={() => onTestClick(s)}>
+                        <button disabled={busy === s.id} onClick={() => setTestFor(s)}>
                           {busy === s.id ? "läuft…" : "Jetzt testen"}
                         </button>
                         <button
@@ -185,6 +194,7 @@ export default function VoipMonitorPage() {
           </div>
 
           {selectedServer.last_test && <LastTestCard test={selectedServer.last_test} />}
+          {selectedServer.last_test && <AnalysisPanels test={selectedServer.last_test} />}
 
           <div className="card" style={{ marginBottom: 16 }}>
             <h2>Antwortzeiten (ms)</h2>
@@ -265,6 +275,8 @@ export default function VoipMonitorPage() {
         </>
       )}
 
+      <AnalyzeCapturePanel setError={setError} />
+
       {showAdd && (
         <ServerModal
           onClose={() => setShowAdd(false)}
@@ -276,10 +288,10 @@ export default function VoipMonitorPage() {
         />
       )}
       {testFor && (
-        <RegisterTestModal
+        <TestModal
           server={testFor}
           onClose={() => setTestFor(null)}
-          onRun={(creds) => runTest(testFor, creds)}
+          onRun={(opts) => runTest(testFor, opts)}
         />
       )}
     </div>
@@ -319,9 +331,222 @@ function LastTestCard({ test }: { test: VoipTest }) {
         <div className="value">{fmtNum(test.loss_pct, 0, "%")}</div>
         <div className="sub">WebRTC {webrtc || "–"}</div>
       </div>
+      <div className="card" style={{ gridColumn: "1 / -1" }}>
+        <table>
+          <tbody>
+            <tr>
+              <td>Server / 3CX-Version</td>
+              <td>{test.server_header ?? "–"}</td>
+            </tr>
+            <tr>
+              <td>Unterstützte Methoden</td>
+              <td>{test.supported_methods ?? "–"}</td>
+            </tr>
+            <tr>
+              <td>TLS</td>
+              <td>
+                {test.tls_version
+                  ? `${test.tls_version} · ${test.tls_cipher ?? "?"}`
+                  : "–"}
+              </td>
+            </tr>
+            <tr>
+              <td>Zertifikat</td>
+              <td>
+                {test.cert_subject
+                  ? `${test.cert_subject}  ←  ${test.cert_issuer ?? "?"}`
+                  : "–"}
+              </td>
+            </tr>
+            {test.capture_url && (
+              <tr>
+                <td>Mitschnitt</td>
+                <td>
+                  <a href={test.capture_url} className="badge dim">
+                    PCAP herunterladen
+                  </a>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
       {test.error && (
         <div className="card" style={{ gridColumn: "1 / -1" }}>
           <span className="muted">{test.error}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalysisPanels({ test }: { test: VoipTest }) {
+  const sip = test.sip_analysis ?? {};
+  const codecs = test.codec_analysis ?? {};
+  const rtp = test.rtp_analysis ?? {};
+  const hasSip = (sip.messages_captured ?? 0) > 0;
+  const hasCodecs = (codecs.codecs_offered ?? []).length > 0;
+  const hasRtp = (rtp.streams_detected ?? 0) > 0;
+  if (!hasSip && !hasCodecs && !hasRtp) return null;
+
+  return (
+    <>
+      {hasSip && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h2>SIP-Analyse (Mitschnitt)</h2>
+          <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+            {Object.entries(sip.by_method ?? {}).map(([m, n]) => (
+              <span key={m} className="badge dim">
+                {m}: {n}
+              </span>
+            ))}
+            {Object.entries(sip.by_status_class ?? {}).map(([c, n]) => (
+              <span key={c} className={`badge ${c === "2xx" ? "ok" : "err"}`}>
+                {c}: {n}
+              </span>
+            ))}
+            <span className="badge dim">Retransmissions: {sip.retransmissions ?? 0}</span>
+          </div>
+          {(sip.errors ?? []).length > 0 && (
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th className="num">Code</th>
+                    <th>Grund</th>
+                    <th>Von → Nach</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(sip.errors ?? []).map((e, i) => (
+                    <tr key={i}>
+                      <td className="num">{e.code}</td>
+                      <td>{e.reason}</td>
+                      <td className="muted">
+                        {e.src} → {e.dst}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {hasCodecs && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h2>Codecs (SDP)</h2>
+          <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+            {(codecs.codecs_offered ?? []).map((c) => (
+              <span key={c} className="badge dim">
+                {c}
+              </span>
+            ))}
+            {codecs.secure && <span className="badge ok">SRTP</span>}
+          </div>
+          <p className="muted" style={{ marginTop: 8 }}>
+            Primär: {codecs.primary_codec ?? "–"}
+            {codecs.estimated_bandwidth_kbit
+              ? ` · geschätzt ~${codecs.estimated_bandwidth_kbit} kbit/s`
+              : ""}
+            {codecs.ptime_ms ? ` · ptime ${codecs.ptime_ms} ms` : ""}
+          </p>
+        </div>
+      )}
+
+      {hasRtp && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h2>RTP-Streams</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>SSRC</th>
+                  <th>Codec</th>
+                  <th>Von → Nach</th>
+                  <th className="num">Pakete</th>
+                  <th className="num">Verlust</th>
+                  <th className="num">Jitter ø</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(rtp.streams ?? []).map((s, i) => (
+                  <tr key={i}>
+                    <td>{s.ssrc}</td>
+                    <td>{s.codec}</td>
+                    <td className="muted">
+                      {s.src} → {s.dst}
+                    </td>
+                    <td className="num">{s.packets}</td>
+                    <td className="num">
+                      {s.lost} ({fmtNum(s.lost_pct, 1, "%")})
+                    </td>
+                    <td className="num">{fmtNum(s.mean_jitter_ms, 1, "ms")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function AnalyzeCapturePanel({ setError }: { setError: (s: string | null) => void }) {
+  const { isAdmin } = useAuth();
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<VoipAnalysis | null>(null);
+
+  if (!isAdmin) return null;
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      setResult(await api.post<VoipAnalysis>("/api/voip/analyze", { capture_path: path.trim() }));
+    } catch (err) {
+      setError((err as ApiError).detail);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <h2>Vorhandene Capture analysieren</h2>
+      <p className="muted">
+        Analysiert eine bereits vorhandene PCAP im Capture-Verzeichnis auf SIP-Dialoge,
+        SDP-/Codec-Angebote und RTP-Streams – z. B. einen echten Gesprächsmitschnitt.
+      </p>
+      <div className="row">
+        <div className="field" style={{ flex: 3 }}>
+          <label>Pfad (unterhalb des Capture-Verzeichnisses)</label>
+          <input
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="/var/lib/netprobe/captures/capture_12_...pcapng"
+          />
+        </div>
+        <button className="primary" onClick={run} disabled={busy || !path.trim()}>
+          {busy ? "Analysiere…" : "Analysieren"}
+        </button>
+      </div>
+      {result && (
+        <div style={{ marginTop: 12 }}>
+          {result.error && <div className="error-box">{result.error}</div>}
+          <AnalysisPanels
+            test={
+              {
+                sip_analysis: result.sip,
+                codec_analysis: result.codecs,
+                rtp_analysis: result.rtp,
+              } as VoipTest
+            }
+          />
         </div>
       )}
     </div>
@@ -433,42 +658,93 @@ function ServerModal({
   );
 }
 
-function RegisterTestModal({
+function TestModal({
   server,
   onClose,
   onRun,
 }: {
   server: VoipServer;
   onClose: () => void;
-  onRun: (creds?: { username: string; password: string }) => void;
+  onRun: (opts: TestOptions) => void;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [iface, setIface] = useState("");
+  const [duration, setDuration] = useState(10);
+  const [interfaces, setInterfaces] = useState<CaptureInterface[]>([]);
+
+  useEffect(() => {
+    api.get<CaptureInterface[]>("/api/voip/interfaces").then(setInterfaces).catch(() => {});
+  }, []);
+
+  function start() {
+    const opts: TestOptions = {};
+    if (username && password) {
+      opts.username = username;
+      opts.password = password;
+    }
+    if (iface) {
+      opts.capture_interface = iface;
+      opts.capture_duration_s = duration;
+    }
+    onRun(opts);
+  }
 
   return (
     <Modal title={`Test: ${server.name}`} onClose={onClose}>
-      <p className="muted">
-        SIP-Zugangsdaten sind optional. Mit Angabe wird zusätzlich ein einzelner{" "}
-        <code>REGISTER</code> ausgeführt. Die Daten werden nicht gespeichert.
-      </p>
       <div className="field">
-        <label>SIP-Benutzer / Nebenstelle</label>
-        <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
+        <label>PCAP-Mitschnitt (optional)</label>
+        <select value={iface} onChange={(e) => setIface(e.target.value)}>
+          <option value="">– kein Mitschnitt –</option>
+          {interfaces.map((i) => (
+            <option key={i.name} value={i.name}>
+              {i.name}
+              {i.description ? ` (${i.description})` : ""}
+            </option>
+          ))}
+        </select>
       </div>
-      <div className="field">
-        <label>SIP-Passwort</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete="off"
-        />
-      </div>
+      {iface && (
+        <div className="field">
+          <label>Mitschnitt-Dauer (s)</label>
+          <input
+            type="number"
+            value={duration}
+            onChange={(e) => setDuration(+e.target.value)}
+          />
+          <span className="muted" style={{ fontSize: 12 }}>
+            Der Mitschnitt erfasst SIP (5060/5061/5090) auf dem gewählten Interface. RTP/Codec-
+            Daten erscheinen nur, wenn währenddessen echter Medienverkehr über die Box läuft.
+          </span>
+        </div>
+      )}
+      {server.check_registration && (
+        <>
+          <p className="muted">
+            SIP-Zugangsdaten sind optional. Mit Angabe wird zusätzlich ein einzelner{" "}
+            <code>REGISTER</code> ausgeführt. Die Daten werden nicht gespeichert.
+          </p>
+          <div className="field">
+            <label>SIP-Benutzer / Nebenstelle</label>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <div className="field">
+            <label>SIP-Passwort</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="off"
+            />
+          </div>
+        </>
+      )}
       <div className="row">
-        <button
-          className="primary"
-          onClick={() => onRun(username && password ? { username, password } : undefined)}
-        >
+        <button className="primary" onClick={start}>
           Test starten
         </button>
       </div>

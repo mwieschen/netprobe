@@ -85,6 +85,14 @@ Für den produktiven Betrieb wird **HTTPS** empfohlen:
   gespeichert, **nie** geloggt, **nicht** als Prozessargument übergeben.
 - Über SIP-over-TLS wird `REGISTER` nur bei **erfolgreich verifiziertem** Zertifikat
   gesendet; schlägt die Prüfung fehl, bricht der Registrierungstest ab.
+- Der optionale **PCAP-Mitschnitt** eines VoIP-Tests nutzt `dumpcap` mit einem fest
+  auf SIP-Ports gesetzten BPF-Filter und schreibt nach `<capture_dir>/voip/`
+  (außerhalb des Webroots, gleiche Rechte wie normale Captures). Er kann – abhängig
+  vom Interface – vertraulichen Gesprächsverkehr enthalten; Download nur für
+  angemeldete Nutzer, Pfad gegen `capture_dir` geprüft. Mitschnitte werden mit dem
+  zugehörigen Test-Datensatz nach `NETPROBE_VOIP_RETENTION_DAYS` gelöscht.
+- `POST /api/voip/analyze` akzeptiert nur Pfade **innerhalb** von `capture_dir`
+  (`relative_to`-Prüfung), keine beliebigen Dateien.
 - Der TLS-Erreichbarkeitstest (ohne Zugangsdaten) misst bei Zertifikatsfehlern
   einmalig die Handshake-Zeit auch unverifiziert – dabei werden **keine Daten**
   über die Verbindung gesendet; `tls_verified=false` weist im UI darauf hin.

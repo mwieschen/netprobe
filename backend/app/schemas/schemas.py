@@ -378,6 +378,18 @@ class VoipTestOut(BaseModel):
     rtt_avg_ms: float | None
     registration_ok: bool | None
     registration_detail: str | None
+    # M6: angereicherte OPTIONS-/TLS-Details + PCAP-Analyse
+    server_header: str | None = None
+    supported_methods: str | None = None
+    tls_version: str | None = None
+    tls_cipher: str | None = None
+    cert_subject: str | None = None
+    cert_issuer: str | None = None
+    capture_path: str | None = None
+    capture_url: str | None = None
+    sip_analysis: dict = {}
+    codec_analysis: dict = {}
+    rtp_analysis: dict = {}
     error: str | None
 
 
@@ -390,6 +402,21 @@ class VoipServerOut(VoipServerBase):
 class VoipTestRequest(BaseModel):
     username: str | None = Field(default=None, max_length=128)
     password: str | None = Field(default=None, max_length=256)
+    capture_interface: str | None = Field(default=None, max_length=64)
+    capture_duration_s: int = Field(default=0, ge=0, le=900)
+    capture_bpf: str | None = Field(default=None, max_length=512)
+
+
+class VoipAnalyzeRequest(BaseModel):
+    capture_id: int | None = None
+    capture_path: str | None = Field(default=None, max_length=512)
+
+
+class VoipAnalysisOut(BaseModel):
+    sip: dict = {}
+    codecs: dict = {}
+    rtp: dict = {}
+    error: str | None = None
 
 
 # --- Traceroute / Pfad-Analyse ---

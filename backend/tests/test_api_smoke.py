@@ -216,6 +216,48 @@ def test_voip_servers_require_auth(client):
     assert client.post("/api/voip/servers", json={"name": "x", "host": "y"}).status_code == 401
 
 
+def test_voip_test_out_has_analysis_fields(admin):
+    resp = admin.post(
+        "/api/voip/servers",
+        json={"name": "a", "host": "127.0.0.1", "sip_port": 9, "sip_tls_port": 0, "webrtc_ports": "9"},
+    )
+    server_id = resp.json()["id"]
+    resp = admin.post(f"/api/voip/servers/{server_id}/test", json={})
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    for key in ("server_header", "supported_methods", "tls_version", "cert_subject",
+                "capture_path", "sip_analysis", "codec_analysis", "rtp_analysis"):
+        assert key in body
+    assert body["capture_path"] is None  # ohne capture_interface
+    admin.delete(f"/api/voip/servers/{server_id}")
+
+
+def test_voip_analyze_validation(admin):
+    assert admin.post("/api/voip/analyze", json={}).status_code == 400
+    # Pfad außerhalb capture_dir -> 400
+    resp = admin.post("/api/voip/analyze", json={"capture_path": "/etc/passwd"})
+    assert resp.status_code == 400
+    # unbekannte capture_id -> 400
+    assert admin.post("/api/voip/analyze", json={"capture_id": 99999}).status_code == 400
+
+
+def test_voip_interfaces_endpoint(admin):
+    resp = admin.get("/api/voip/interfaces")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+def test_voip_capture_download_404_without_capture(admin):
+    resp = admin.post(
+        "/api/voip/servers",
+        json={"name": "b", "host": "127.0.0.1", "sip_tls_port": 0, "webrtc_ports": ""},
+    )
+    server_id = resp.json()["id"]
+    tid = admin.post(f"/api/voip/servers/{server_id}/test", json={}).json()["id"]
+    assert admin.get(f"/api/voip/tests/{tid}/capture").status_code == 404
+    admin.delete(f"/api/voip/servers/{server_id}")
+
+
 def test_traceroute_target_crud(admin):
     resp = admin.post(
         "/api/traceroute/targets",

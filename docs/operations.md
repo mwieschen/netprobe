@@ -340,24 +340,54 @@ hartes Kriterium.
 | `POST /api/voip/servers` | admin | 3CX-Server anlegen |
 | `PATCH /api/voip/servers/<id>` | admin | ändern (Zeitplan sofort neu synchronisiert) |
 | `DELETE /api/voip/servers/<id>` | admin | löschen (Historie via CASCADE) |
-| `POST /api/voip/servers/<id>/test` | admin | Ad-hoc-Lauf. Body optional `{username, password}` für den Registrierungstest |
+| `POST /api/voip/servers/<id>/test` | admin | Ad-hoc-Lauf. Body optional `{username, password}` (Registrierungstest), `{capture_interface, capture_duration_s, capture_bpf}` (paralleler PCAP-Mitschnitt) |
 | `GET /api/voip/servers/<id>/history` | viewer | `range=24h\|7d\|30d\|all` |
 | `GET /api/voip/history` | viewer | letzte Läufe über alle Server (Dashboard) |
+| `GET /api/voip/interfaces` | admin | Capture-Interfaces (`dumpcap -D`) für den Mitschnitt |
+| `GET /api/voip/tests/<id>/capture` | viewer | PCAP-Mitschnitt eines Tests herunterladen |
+| `POST /api/voip/analyze` | admin | vorhandene Capture (`{capture_id}` oder `{capture_path}`) auf SIP/SDP/RTP analysieren – nicht persistiert |
 
 Der Scheduler misst jeden aktivierten Server im Intervall `interval_s` (min. 60 s).
-Retention: `NETPROBE_VOIP_RETENTION_DAYS` (Standard 365). Keine externen Tools –
-reine Standardbibliothek (`socket`/`ssl`).
+Retention: `NETPROBE_VOIP_RETENTION_DAYS` (Standard 365); die Mitschnitt-Dateien
+werden dabei mitgelöscht. Verbindungs-/TLS-Prüfung: reine Standardbibliothek
+(`socket`/`ssl`); die PCAP-Analyse braucht `tshark`/`dumpcap` (schon für Captures
+installiert).
+
+**Angereicherte OPTIONS-Antwort:** `server_header` (z. B. `3CXPhoneSystem/18.0.0`
+aus `Server:`/`User-Agent:`), `supported_methods` (aus `Allow:`).
+**TLS-Details** am SIP-TLS-Port: `tls_version`, `tls_cipher`, `cert_subject`,
+`cert_issuer` (zusätzlich zum Ablaufdatum).
+
+**PCAP-Mitschnitt (opt-in).** Mit `capture_interface` im Test-Request wird parallel
+zu den SIP-/TLS-Probes ein kurzer `dumpcap`-Mitschnitt (Default-BPF
+`NETPROBE_VOIP_CAPTURE_BPF_DEFAULT`, Dauer `capture_duration_s` bzw.
+`NETPROBE_VOIP_CAPTURE_DEFAULT_DURATION_S`) nach `<capture_dir>/voip/` geschrieben
+und anschließend analysiert:
+
+- **SIP-Dialog** (`sip_analysis`): Nachrichten je Methode/Statusklasse, Fehlerliste
+  4xx/5xx/6xx, Retransmissions (`sip.resend`), CSeq-Konsistenz je Call-ID.
+- **Codecs** (`codec_analysis`): aus `a=rtpmap`/`a=fmtp`/`a=ptime` + statischen
+  Payload-Typen; SRTP-Erkennung (`RTP/SAVP`, `crypto:`, DTLS); grobe
+  Bandbreitenschätzung je Codec (Näherung inkl. Overhead).
+- **RTP** (`rtp_analysis`): aus `tshark -z rtp,streams` – Streams, Payload-Type,
+  Paketverlust, mittlerer Jitter.
+
+Die Box sieht immer ihren **eigenen** OPTIONS-Austausch; RTP/INVITE echter
+Gespräche nur, wenn dieser Verkehr die Box passiert (Gateway/Mirror-Port).
 
 **SIP-Zugangsdaten** für den Registrierungstest werden **nie gespeichert oder
 geloggt** und über TLS nur über einen **verifizierten** Kanal gesendet (siehe
 `docs/security.md`).
 
-**CLI:** `python -m app.cli voip-test --server pbx.kunde.example --port 5061`
-(nicht persistierter Einmal-Test).
+**CLI:**
+- `python -m app.cli voip-test --server pbx.kunde.example --port 5061 [--capture-interface eth0 --capture-duration 10]`
+- `python -m app.cli voip-analyze --capture-file <pfad-unter-capture_dir>`
 
-**UI:** Seite *VoIP / 3CX* – Server-Tabelle mit Ampel, „Jetzt testen", Verlaufs-
-Diagramme (SIP-/TLS-Antwortzeit, Verlust) und Lauf-Historie. Dashboard-Karte
-„VoIP / 3CX", sobald mindestens ein Server konfiguriert ist.
+**UI:** Seite *VoIP / 3CX* – Server-Tabelle mit Ampel, „Jetzt testen" (mit
+Interface-/Dauer-Auswahl für den Mitschnitt), Detailkarte mit 3CX-Version /
+Methoden / TLS-Version+Cipher / Zertifikat, Analyse-Panels (SIP / Codecs /
+RTP-Streams), PCAP-Download sowie ein Panel „Vorhandene Capture analysieren".
+Dashboard-Karte „VoIP / 3CX", sobald mindestens ein Server konfiguriert ist.
 
 ### 7. Traceroute / Pfad-Analyse
 

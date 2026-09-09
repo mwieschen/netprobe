@@ -23,15 +23,19 @@ import re
 import secrets
 import socket
 import ssl
+import threading
 import time
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.voip import VoipServer, VoipTest
-from app.services import wan_service
+from app.services import capture_service, voip_analysis, wan_service
 from app.services.proc import validate_network_target
 
 log = get_logger("netprobe.voip")
@@ -64,6 +68,26 @@ def _parse_cert_expiry(cert: dict | None) -> datetime | None:
         return None
 
 
+def _flatten_name(name) -> str:
+    """``getpeercert()``-Name (Tupel von RDN-Tupeln) -> "CN=…, O=…"."""
+    parts = []
+    for rdn in name or ():
+        for key, value in rdn:
+            parts.append(f"{key}={value}")
+    return ", ".join(parts)
+
+
+def _cert_details(cert: dict | None) -> dict:
+    if not cert:
+        return {"cert_subject": None, "cert_issuer": None, "cert_san": None}
+    san = ", ".join(v for _, v in cert.get("subjectAltName", ())) or None
+    return {
+        "cert_subject": _flatten_name(cert.get("subject")) or None,
+        "cert_issuer": _flatten_name(cert.get("issuer")) or None,
+        "cert_san": san,
+    }
+
+
 def check_tls(host: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> dict:
     """TLS-Handshake am SIP-TLS-Port.
 
@@ -77,17 +101,31 @@ def check_tls(host: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> dict:
         "verified": False,
         "handshake_ms": None,
         "cert_expiry": None,
+        "tls_version": None,
+        "tls_cipher": None,
+        "cert_subject": None,
+        "cert_issuer": None,
+        "cert_san": None,
         "error": None,
     }
-    def _handshake(ctx: ssl.SSLContext) -> tuple[float, dict | None]:
+
+    def _handshake(ctx: ssl.SSLContext) -> tuple[float, dict | None, str | None, str | None]:
         start = time.perf_counter()
         with socket.create_connection((host, port), timeout=timeout) as raw, \
                 ctx.wrap_socket(raw, server_hostname=host) as tls:
-            return round((time.perf_counter() - start) * 1000, 2), tls.getpeercert()
+            ms = round((time.perf_counter() - start) * 1000, 2)
+            cipher = tls.cipher()
+            return ms, tls.getpeercert(), tls.version(), cipher[0] if cipher else None
+
+    def _apply(ms: float, cert: dict | None, version: str | None, cipher: str | None) -> None:
+        result.update(
+            handshake_ms=ms, cert_expiry=_parse_cert_expiry(cert),
+            tls_version=version, tls_cipher=cipher, **_cert_details(cert),
+        )
 
     try:
-        ms, cert = _handshake(ssl.create_default_context())
-        result.update(handshake_ms=ms, cert_expiry=_parse_cert_expiry(cert), ok=True, verified=True)
+        _apply(*_handshake(ssl.create_default_context()))
+        result.update(ok=True, verified=True)
         return result
     except ssl.SSLError as exc:
         result["error"] = f"TLS-Zertifikat nicht verifizierbar: {exc.reason or exc}"
@@ -99,8 +137,8 @@ def check_tls(host: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> dict:
     # werden über diesen Socket gesendet). ``tls_verified`` bleibt False.
     insecure = ssl._create_unverified_context()  # noqa: S323 - bewusst, reine Zeitmessung
     try:
-        ms, cert = _handshake(insecure)
-        result.update(handshake_ms=ms, cert_expiry=_parse_cert_expiry(cert), ok=True)
+        _apply(*_handshake(insecure))
+        result.update(ok=True)
     except OSError as exc:
         result["error"] = f"TLS-Verbindung fehlgeschlagen: {exc}"
     return result
@@ -164,6 +202,27 @@ def _parse_status(data: bytes) -> int | None:
     return int(m.group(1)) if m else None
 
 
+_WANTED_HEADERS = ("server", "user-agent", "allow", "supported", "accept")
+
+
+def _parse_headers(data: bytes) -> dict:
+    """Extrahiert ausgewählte Header aus einer SIP-Antwort (case-insensitiv)."""
+    out: dict = {}
+    text = data.decode("utf-8", errors="replace")
+    for line in text.split("\r\n"):
+        if line == "":
+            break  # Ende des Header-Blocks
+        if ":" not in line:
+            continue
+        name, _, value = line.partition(":")
+        key = name.strip().lower()
+        if key in _WANTED_HEADERS:
+            value = value.strip()
+            # Mehrfach-Header (z. B. Allow) zusammenführen
+            out[key] = f"{out[key]}, {value}" if key in out else value
+    return out
+
+
 def _send_recv(
     host: str,
     port: int,
@@ -212,10 +271,10 @@ def sip_options_ping(
     try:
         data, _ = _send_recv(host, port, transport, build, timeout)
     except TimeoutError:
-        return {"reachable": False, "response_ms": None, "status_code": None,
+        return {"reachable": False, "response_ms": None, "status_code": None, "headers": {},
                 "error": "Keine SIP-Antwort (Timeout – Port offen oder gefiltert)."}
     except OSError as exc:
-        return {"reachable": False, "response_ms": None, "status_code": None,
+        return {"reachable": False, "response_ms": None, "status_code": None, "headers": {},
                 "error": f"SIP-Verbindung fehlgeschlagen: {exc}"}
 
     code = _parse_status(data)
@@ -223,6 +282,7 @@ def sip_options_ping(
         "reachable": code is not None,
         "response_ms": round((time.perf_counter() - start) * 1000, 2),
         "status_code": code,
+        "headers": _parse_headers(data) if code is not None else {},
         "error": None if code is not None else "Antwort war keine gültige SIP-Statuszeile.",
     }
 
@@ -361,6 +421,22 @@ def _parse_ports(raw: str) -> list[int]:
     return ports
 
 
+def _voip_capture_dir() -> Path:
+    return settings.capture_dir / "voip"
+
+
+class _CaptureThread(threading.Thread):
+    """Führt den optionalen Mitschnitt parallel zu den SIP-/TLS-Probes."""
+
+    def __init__(self, iface: str, out_path: Path, duration_s: int, bpf: str | None) -> None:
+        super().__init__(daemon=True)
+        self._args = (iface, out_path, duration_s, bpf)
+        self.result: Path | None = None
+
+    def run(self) -> None:
+        self.result = capture_service.run_capture_window(*self._args)
+
+
 def run_test(
     db: Session,
     server: VoipServer,
@@ -368,6 +444,9 @@ def run_test(
     source: str = "manual",
     username: str | None = None,
     password: str | None = None,
+    capture_interface: str | None = None,
+    capture_duration_s: int = 0,
+    capture_bpf: str | None = None,
 ) -> VoipTest:
     """Führt alle passenden Teilprüfungen aus und persistiert ein ``VoipTest``."""
     try:
@@ -381,6 +460,20 @@ def run_test(
 
     errors: list[str] = []
 
+    # Optionaler paralleler PCAP-Mitschnitt – jetzt starten, damit er die eigene
+    # OPTIONS-Transaktion sicher erfasst.
+    cap_thread: _CaptureThread | None = None
+    if capture_interface:
+        try:
+            iface = capture_service.validate_iface(capture_interface)
+            bpf = capture_service.validate_bpf(capture_bpf or settings.voip_capture_bpf_default)
+            duration = capture_duration_s or settings.voip_capture_default_duration_s
+            out_path = _voip_capture_dir() / f"voiptest_{int(time.time())}_{uuid.uuid4().hex[:8]}.pcapng"
+            cap_thread = _CaptureThread(iface, out_path, duration, bpf)
+            cap_thread.start()
+        except capture_service.CaptureValidationError as exc:
+            errors.append(f"Mitschnitt nicht gestartet: {exc}")
+
     # SIP-OPTIONS-Ping je Transport (UDP immer, TCP immer als Info).
     udp = sip_options_ping(host, server.sip_port, "udp")
     tcp = sip_options_ping(host, server.sip_port, "tcp")
@@ -392,17 +485,27 @@ def run_test(
     if opt["error"] and not opt["reachable"]:
         errors.append(f"SIP-OPTIONS ({server.sip_transport}): {opt['error']}")
 
+    # Angereicherte OPTIONS-Header (3CX-Version, unterstützte Methoden)
+    opt_headers: dict = opt.get("headers") or udp.get("headers") or tcp.get("headers") or {}
+    server_header = opt_headers.get("server") or opt_headers.get("user-agent")
+    supported_methods = opt_headers.get("allow")
+
     # SIP over TLS
     tls_ok: bool | None = None
     tls_ms: float | None = None
     tls_verified: bool | None = None
     tls_expiry: datetime | None = None
+    tls_extra: dict = {}
     if server.sip_tls_port and server.sip_tls_port > 0:
         tls = check_tls(host, server.sip_tls_port)
         tls_ok = tls["ok"]
         tls_ms = tls["handshake_ms"]
         tls_verified = tls["verified"]
         tls_expiry = tls["cert_expiry"]
+        tls_extra = {
+            "tls_version": tls["tls_version"], "tls_cipher": tls["tls_cipher"],
+            "cert_subject": tls["cert_subject"], "cert_issuer": tls["cert_issuer"],
+        }
         if tls["error"]:
             errors.append(f"SIP-TLS ({server.sip_tls_port}): {tls['error']}")
 
@@ -441,6 +544,27 @@ def run_test(
         reg_ok = reg["ok"]
         reg_detail = reg["detail"]
 
+    # Auf den Mitschnitt warten und analysieren.
+    capture_path: str | None = None
+    sip_analysis: dict = {}
+    codec_analysis: dict = {}
+    rtp_analysis: dict = {}
+    if cap_thread is not None:
+        cap_thread.join()
+        if cap_thread.result is not None:
+            capture_path = str(cap_thread.result)
+            try:
+                res = voip_analysis.analyze_capture(cap_thread.result)
+                sip_analysis = res["sip"]
+                codec_analysis = res["codecs"]
+                rtp_analysis = res["rtp"]
+                if res["error"]:
+                    errors.append(f"PCAP-Analyse: {res['error']}")
+            except Exception as exc:  # noqa: BLE001 - Analyse nicht fatal
+                errors.append(f"PCAP-Analyse: {exc}")
+        else:
+            errors.append("Mitschnitt erzeugte keine Datei (dumpcap/Interface prüfen).")
+
     # Gesamturteil: SIP erreichbar (irgendein Transport) und – falls TLS-Port
     # gesetzt – TLS-Handshake ok. WebRTC/ICMP fließen als Warnungen ein, nicht als
     # hartes Kriterium.
@@ -466,6 +590,16 @@ def run_test(
         rtt_avg_ms=rtt_avg,
         registration_ok=reg_ok,
         registration_detail=reg_detail,
+        server_header=(server_header or "")[:255] or None,
+        supported_methods=(supported_methods or "")[:255] or None,
+        tls_version=tls_extra.get("tls_version"),
+        tls_cipher=(tls_extra.get("tls_cipher") or "")[:64] or None,
+        cert_subject=(tls_extra.get("cert_subject") or "")[:255] or None,
+        cert_issuer=(tls_extra.get("cert_issuer") or "")[:255] or None,
+        capture_path=capture_path,
+        sip_analysis_json=json.dumps(sip_analysis),
+        codec_analysis_json=json.dumps(codec_analysis),
+        rtp_analysis_json=json.dumps(rtp_analysis),
         error="; ".join(errors) if errors else None,
     )
     db.add(test)

@@ -84,6 +84,9 @@ class Settings(BaseSettings):
 
     # --- VoIP / 3CX ---
     voip_retention_days: int = 365
+    # Optionaler paralleler PCAP-Mitschnitt während eines VoIP-Tests.
+    voip_capture_bpf_default: str = "port 5060 or port 5061 or port 5090"
+    voip_capture_default_duration_s: int = 10
 
     # --- System-Health-Checks ---
     health_check_retention_days: int = 90

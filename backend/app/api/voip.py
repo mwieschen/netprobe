@@ -5,34 +5,43 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, get_current_user, require_admin
+from app.core.config import settings
 from app.core.timeutils import utcnow
 from app.db.session import get_db, session_scope
 from app.models.user import User
 from app.models.voip import VoipServer, VoipTest
 from app.schemas.schemas import (
+    VoipAnalysisOut,
+    VoipAnalyzeRequest,
     VoipServerCreate,
     VoipServerOut,
     VoipServerUpdate,
     VoipTestOut,
     VoipTestRequest,
 )
-from app.services import audit, voip_service
+from app.services import audit, capture_service, voip_analysis, voip_service
+from app.services.proc import ToolNotFoundError
 from app.workers.scheduler import scheduler_service
 
 router = APIRouter(prefix="/api/voip", tags=["voip"])
 
 
-def _test_to_out(test: VoipTest) -> VoipTestOut:
+def _jload(raw: str | None, default):
     try:
-        webrtc = json.loads(test.webrtc_results_json or "[]")
+        return json.loads(raw) if raw else default
     except (json.JSONDecodeError, TypeError):
-        webrtc = []
+        return default
+
+
+def _test_to_out(test: VoipTest) -> VoipTestOut:
     return VoipTestOut(
         id=test.id,
         server_id=test.server_id,
@@ -42,7 +51,7 @@ def _test_to_out(test: VoipTest) -> VoipTestOut:
         sip_udp_ok=test.sip_udp_ok,
         sip_tcp_ok=test.sip_tcp_ok,
         sip_tls_ok=test.sip_tls_ok,
-        webrtc_results=webrtc,
+        webrtc_results=_jload(test.webrtc_results_json, []),
         sip_response_ms=test.sip_response_ms,
         sip_response_code=test.sip_response_code,
         tls_handshake_ms=test.tls_handshake_ms,
@@ -52,6 +61,17 @@ def _test_to_out(test: VoipTest) -> VoipTestOut:
         rtt_avg_ms=test.rtt_avg_ms,
         registration_ok=test.registration_ok,
         registration_detail=test.registration_detail,
+        server_header=test.server_header,
+        supported_methods=test.supported_methods,
+        tls_version=test.tls_version,
+        tls_cipher=test.tls_cipher,
+        cert_subject=test.cert_subject,
+        cert_issuer=test.cert_issuer,
+        capture_path=test.capture_path,
+        capture_url=f"/api/voip/tests/{test.id}/capture" if test.capture_path else None,
+        sip_analysis=_jload(test.sip_analysis_json, {}),
+        codec_analysis=_jload(test.codec_analysis_json, {}),
+        rtp_analysis=_jload(test.rtp_analysis_json, {}),
         error=test.error,
     )
 
@@ -158,24 +178,83 @@ async def run_test_now(
                  detail=str(server_id), ip=client_ip(request))
     db.commit()
 
-    username = payload.username
-    password = payload.password
+    p = payload
 
     def _job() -> int:
         with session_scope() as s:
             srv = s.get(VoipServer, server_id)
             if srv is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "3CX-Server nicht gefunden")
-            test = voip_service.run_test(
-                s, srv, source="manual", username=username, password=password
-            )
-            return test.id
+            return voip_service.run_test(
+                s, srv, source="manual",
+                username=p.username, password=p.password,
+                capture_interface=p.capture_interface,
+                capture_duration_s=p.capture_duration_s,
+                capture_bpf=p.capture_bpf,
+            ).id
 
     test_id = await asyncio.to_thread(_job)
     test = db.get(VoipTest, test_id)
     if test is None:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Testergebnis nicht gefunden")
     return _test_to_out(test)
+
+
+@router.get("/interfaces")
+def list_interfaces(_: User = Depends(require_admin)) -> list[dict]:
+    """Capture-Interfaces für den optionalen Test-Mitschnitt (``dumpcap -D``)."""
+    try:
+        return capture_service.list_interfaces()
+    except ToolNotFoundError:
+        return []
+
+
+@router.post("/analyze", response_model=VoipAnalysisOut)
+async def analyze_capture(
+    payload: VoipAnalyzeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> VoipAnalysisOut:
+    """Analysiert eine **vorhandene** Capture auf SIP/SDP/RTP (nicht persistiert)."""
+    if payload.capture_id is None and not payload.capture_path:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "capture_id oder capture_path erforderlich.")
+
+    audit.record(db, "voip_analyze", user_id=user.id, username=user.username,
+                 detail=str(payload.capture_id or payload.capture_path), ip=client_ip(request))
+    db.commit()
+
+    def _job() -> dict:
+        with session_scope() as s:
+            path = voip_analysis.resolve_capture(
+                s, capture_path=payload.capture_path, capture_id=payload.capture_id
+            )
+            return voip_analysis.analyze_capture(path)
+
+    try:
+        res = await asyncio.to_thread(_job)
+    except voip_analysis.VoipAnalysisError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return VoipAnalysisOut(**res)
+
+
+@router.get("/tests/{test_id}/capture")
+def download_capture(
+    test_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    test = db.get(VoipTest, test_id)
+    if test is None or not test.capture_path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Kein Mitschnitt für diesen Test.")
+    path = Path(test.capture_path)
+    try:
+        path.resolve().relative_to(settings.capture_dir.resolve())
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Ungültiger Capture-Pfad.") from exc
+    if not path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mitschnitt-Datei fehlt.")
+    return FileResponse(path, media_type="application/vnd.tcpdump.pcap", filename=path.name)
 
 
 @router.get("/servers/{server_id}/history", response_model=list[VoipTestOut])

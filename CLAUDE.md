@@ -154,7 +154,18 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   `wan_service.measure`), and an optional Digest-auth `REGISTER` (credentials come only from
   the request body — **never persisted or logged**; TLS `REGISTER` requires a verified cert).
   Scheduled per server via `scheduler_service.sync_voip_jobs()` (`voip_server_` job prefix).
-  Never places a real call.
+  Never places a real call. `sip_options_ping` also parses response headers
+  (`server`/`allow`); `check_tls` returns version/cipher/subject/issuer.
+- `app/services/voip_analysis.py` + `app/services/sip_parsers.py` (pure, like
+  `tshark_parsers`) — optional PCAP deep-analysis. A test with `capture_interface`
+  runs `capture_service.run_capture_window()` in a thread parallel to the probes,
+  then `analyze_capture()` does two tshark passes (`-Y sip -T fields`; `-z rtp,streams`)
+  → `parse_sip_messages` (dialogs, 4xx/5xx/6xx, retransmissions), `codec_summary`
+  (SDP rtpmap/fmtp/ptime + static payloads, SRTP, rough bandwidth), `parse_rtp_streams`
+  + `rtp_summary` (jitter/loss). `SIP_FIELDS` order MUST match `sip_parsers._N_FIELDS`.
+  `POST /api/voip/analyze` runs it on any existing capture (path checked against
+  `capture_dir`); `GET /api/voip/tests/<id>/capture` downloads the run's pcap.
+  CLI: `voip-analyze --capture-file`.
 - `app/api/traceroute.py` (`/api/traceroute`) + `app/models/traceroute.py` —
   `traceroute_service.run()` prefers `mtr --json` (`parse_mtr_json`), falls back to
   `traceroute` text (`parse_traceroute_text`); enriches hops with reverse DNS,

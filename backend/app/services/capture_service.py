@@ -148,6 +148,33 @@ def run_capture(db: Session, capture: Capture) -> Capture:
     return capture
 
 
+def run_capture_window(
+    iface: str, out_path: Path, duration_s: int, bpf: str | None = None
+) -> Path | None:
+    """Blockierender Kurz-Mitschnitt (für den parallelen VoIP-Test-Mitschnitt).
+
+    Validiert Interface/BPF, ruft ``dumpcap`` mit ``-a duration:`` und gibt die
+    geschriebene Datei zurück oder ``None``. Kein DB-Zugriff. Fehler werden nur
+    geloggt (der Aufrufer läuft weiter).
+    """
+    duration_s = max(1, min(duration_s, settings.capture_max_duration_s))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        args = build_dumpcap_args(
+            validate_iface(iface), out_path, duration_s,
+            max_packets=None, max_filesize_mb=None, ringbuffer=None,
+            bpf=validate_bpf(bpf),
+        )
+        proc = run_sync(args, timeout=duration_s + 20)
+    except (CaptureValidationError, ToolNotFoundError) as exc:
+        log.warning("VoIP-Mitschnitt fehlgeschlagen: %s", exc)
+        return None
+    if not out_path.exists():
+        log.warning("VoIP-Mitschnitt erzeugte keine Datei: %s", proc.stderr.strip())
+        return None
+    return out_path
+
+
 def _count_packets(path: Path) -> int | None:
     try:
         proc = run_sync(

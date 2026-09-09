@@ -71,6 +71,20 @@ class VoipTest(Base):
     registration_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     registration_detail: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # --- M6: angereicherte OPTIONS-Antwort + TLS-Details ---
+    server_header: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    supported_methods: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tls_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    tls_cipher: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cert_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cert_issuer: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- M6: optionaler PCAP-Mitschnitt + Analyse (tshark) ---
+    capture_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    sip_analysis_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    codec_analysis_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    rtp_analysis_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     server: Mapped[VoipServer] = relationship(back_populates="tests")

@@ -35,9 +35,11 @@ durch und ermöglicht sichere Packet Captures mit Basisanalyse – alles lokal,
   (Zeitabweichung/Stratum), periodisch mit Historie und Dashboard-Übersicht.
 - **Dashboard** – Gesundheitsstatus, aktuelle Messwerte, Netzwerk-Topologie
   (Status-Ampeln aller Ziele) und Störungs-Timeline der letzten 24 h.
-- **VoIP / 3CX** – SIP-/SIP-TLS-/WebRTC-Erreichbarkeit, SIP-`OPTIONS`-Antwortzeit,
-  TLS-Handshake & Zertifikatsablauf, ICMP-Verlust, optionaler Registrierungstest
-  (Zugangsdaten werden nicht gespeichert). **Kein Anruf.**
+- **VoIP / 3CX** – SIP-/SIP-TLS-/WebRTC-Erreichbarkeit, SIP-`OPTIONS`-Antwortzeit +
+  Server-Header/Methoden, volle TLS-Details (Version/Cipher/Zertifikat), ICMP-Verlust,
+  optionaler Registrierungstest (Zugangsdaten werden nicht gespeichert). **Kein Anruf.**
+  Optional paralleler PCAP-Mitschnitt mit SIP-Dialog-, SDP-/Codec- und RTP-Analyse
+  (Jitter/Verlust); separate Analyse vorhandener Captures.
 - **Reports** – passive PCAP-Analyse + aktive Testergebnisse als druckfreundliches
   HTML (optional PDF via WeasyPrint).
 - **Authentifizierung** – lokale Benutzer mit Argon2, RBAC (`admin`/`viewer`),
