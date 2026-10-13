@@ -10,6 +10,10 @@ Dieses Dokument beschreibt die getroffenen Sicherheitsmaßnahmen und Empfehlunge
 - **nginx** terminiert den LAN-Verkehr auf Port 80/443 und leitet an das Backend weiter.
 - Der systemd-Dienst ist gehärtet (`ProtectSystem=strict`, `PrivateTmp`,
   `NoNewPrivileges`, eingeschränkte `ReadWritePaths`).
+- `/opt/netprobe` (Code, venv, `install.sh`) gehört `root` und ist für das Dienstkonto
+  nur lesbar. Der Installer führt daraus als root Skripte und venv-Binaries aus; ein
+  kompromittierter Dienst kann diese daher nicht manipulieren. Beschreibbar sind nur
+  `/var/lib/netprobe` und `/var/log/netprobe`.
 - Für Ping-/Capture-Messungen erhält der Dienst **ausschließlich** `CAP_NET_RAW`
   und `CAP_NET_ADMIN` (via `AmbientCapabilities`/`CapabilityBoundingSet`), **keine**
   weiteren Root-Rechte. `HOME` des Dienstes ist `/var/lib/netprobe` (beschreibbar

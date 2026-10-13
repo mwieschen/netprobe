@@ -413,6 +413,17 @@ install_speedtest_tarball() {
 # ---------------------------------------------------------------------------
 # 3. Benutzer, Verzeichnisse, Capabilities
 # ---------------------------------------------------------------------------
+# /opt/netprobe gehört root und ist für den Dienst nur lesbar: root führt daraus
+# install.sh sowie venv-Binaries (pip/alembic) aus – wäre der Baum dem Dienstkonto
+# beschreibbar, könnte ein kompromittierter Dienst sich beim nächsten Update root-
+# Rechte verschaffen. Zur Laufzeit ist /opt/netprobe ohnehin read-only
+# (ProtectSystem=strict); beschreibbar sind nur DATA_DIR/LOG_DIR.
+secure_app_dir() {
+    [ -d "$APP_DIR" ] || return 0
+    chown -R root:root "$APP_DIR"
+    chmod -R u+rwX,go+rX,go-w "$APP_DIR"
+}
+
 setup_user_dirs() {
     if ! id "$APP_USER" >/dev/null 2>&1; then
         log "Erstelle Systembenutzer '${APP_USER}'…"
@@ -430,7 +441,8 @@ setup_user_dirs() {
     mkdir -p "$APP_DIR" "$DATA_DIR" "$CAPTURE_DIR" "$LOG_DIR" "$ETC_DIR" \
              "$DATA_DIR/.config/ookla" "$DATA_DIR/.cache" "$DATA_DIR/reports" \
              "$DATA_DIR/geoip"
-    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$DATA_DIR" "$LOG_DIR"
+    chown -R "$APP_USER:$APP_GROUP" "$DATA_DIR" "$LOG_DIR"
+    secure_app_dir
     chmod 750 "$DATA_DIR" "$LOG_DIR" "$DATA_DIR/reports" "$DATA_DIR/geoip"
     chmod 700 "$DATA_DIR/.config" "$DATA_DIR/.cache"
 
@@ -552,7 +564,7 @@ deploy_backend() {
     mkdir -p "$APP_DIR/scripts"
     cp "$SRC_DIR"/scripts/{backup,restore,fix-permissions}.sh "$APP_DIR/scripts/" 2>/dev/null || true
     chmod 755 "$APP_DIR"/scripts/*.sh 2>/dev/null || true
-    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+    secure_app_dir
     ok "Backend-Code eingespielt."
 }
 
@@ -560,7 +572,7 @@ deploy_backend() {
 record_version() {
     mkdir -p "$STATE_DIR"
     echo "$NEW_VERSION" > "$STATE_DIR/version"
-    chown -R "$APP_USER:$APP_GROUP" "$STATE_DIR"
+    secure_app_dir
 }
 
 # Python-Abhängigkeiten: vollständige Installation nur bei neuem venv oder
@@ -633,7 +645,7 @@ deploy_frontend() {
     if [ -n "$src_hash" ]; then
         echo "$src_hash" > "$STATE_DIR/frontend-src.md5"
     fi
-    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/frontend" "$STATE_DIR"
+    secure_app_dir
     return 0
 }
 
@@ -1254,7 +1266,7 @@ restore_snapshot() {
         "$VENV_DIR/bin/pip" install --quiet --no-deps --no-build-isolation --force-reinstall \
             "$APP_DIR/backend" || warn "pip-Reinstallation des Pakets fehlgeschlagen."
     fi
-    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+    secure_app_dir
     if nginx -t >/dev/null 2>&1; then systemctl reload-or-restart nginx || true; fi
     systemctl start netprobe || warn "Dienst konnte nicht gestartet werden (journalctl -u netprobe -n 50)."
 }
