@@ -42,8 +42,23 @@ npm run lint       # tsc --noEmit
 npm run build      # tsc --noEmit && vite build -> frontend/dist
 ```
 
-Full deployment is `sudo ./install.sh` (idempotent; detects OS, builds frontend, sets up
-systemd + nginx, creates admin). See `docs/operations.md` for update/backup/restore.
+Deployment: `install.sh` is a single self-healing entry point (`curl …/install.sh | sudo bash`,
+`sudo bash install.sh`, or `/opt/netprobe/install.sh` which it copies there). No prompts by default
+(`--interactive` restores them; stdin is redirected so `curl | bash` is safe). Without a local source
+dir it bootstraps one: latest GitHub release asset `netprobe.tar.gz` (prebuilt dist, from
+`scripts/build-release.sh`) → else branch archive; `NETPROBE_REPO`/`NETPROBE_REF`/`NETPROBE_SOURCE_URL`
+override. Mode = fresh install if `/opt/netprobe/venv` is missing, else smart update:
+`plan_update()` sets `CHANGED_*` from `backend_code_changed()` (md5 of `BACKEND_PATHS`, source vs.
+installed), `python_deps_changed()`, `frontend_code_changed()` (dist md5 for release packages,
+source md5 vs. `.install-state/frontend-src.md5` for checkouts), `systemd_unit_changed()`,
+`migrations_pending()` (`alembic current` vs. `heads`). Nothing changed → `self_heal()` only, no
+restart. Otherwise `backup_current_installation()` (snapshot: DB `.backup` + `/opt/netprobe` sans
+venv + config, under `/var/lib/netprobe/backups/snapshot_*`) → apply → migrate + verify → start →
+smoke test; while `UPDATE_IN_PROGRESS=1` any failure triggers `on_exit()` → `restore_snapshot()`.
+Flags: `--rebuild-frontend`, `--run-migrations`, `--backup-only`, `--rollback[=DIR]`,
+`--list-backups`, `--force`. Initial admin password is random (shown once) unless
+`NETPROBE_ADMIN_PASSWORD`. nginx/logrotate are dpkg-style conffiles (locally modified → kept, new
+version written as `*.netprobe-new`). See `docs/installation.md`, `docs/update.md`.
 
 ## Architecture
 
@@ -82,10 +97,23 @@ else on disk is writable. `scripts/fix-permissions.sh` is the idempotent repair 
 deployed box (capture dir perms, caps, speedtest license).
 
 ### Background work
-- `app/workers/scheduler.py` — `AsyncIOScheduler` (UTC). Scheduled speedtests (DB-based job lock
-  via `kvstore.acquire_lock`), per-target WAN measurements, 5-min ping aggregation, retention
-  cleanup. Blocking jobs are dispatched with `asyncio.to_thread`. `reschedule_speedtest()` /
-  `sync_wan_jobs()` re-sync jobs after config or target changes.
+- `app/workers/scheduler.py` — `AsyncIOScheduler` (UTC), one instance for every automated test
+  (speedtest, retransmission monitor, per-target WAN/VoIP/traceroute/health jobs). Scheduled
+  speedtests use a DB-based job lock via `kvstore.acquire_lock`; blocking jobs are dispatched with
+  `asyncio.to_thread`. `reschedule_speedtest()` / `sync_wan_jobs()` / `sync_voip_jobs()` /
+  `sync_traceroute_jobs()` / `sync_health_jobs()` / `reschedule_retransmission()` re-sync jobs
+  after config or target changes. `SchedulerService.enabled` is a global automation switch
+  (`/api/scheduler/enable|disable`, mirrored in the KV store as `scheduler_enabled`, same
+  live-reload pattern as `speedtest_enabled`): it pauses/resumes every test job via APScheduler's
+  own `job.pause()`/`job.resume()` without removing them, applied via `_apply_enabled_state()` at
+  the end of every sync/reschedule method so newly-added jobs come up already paused if the switch
+  is off. `_HOUSEKEEPING_JOB_IDS` (`ping_aggregate`, `retention_cleanup`) are exempt — they always
+  run. `app/api/scheduler_api.py` (`/api/scheduler`) builds the `GET /status` overview by walking
+  every target table (`WanTarget`, `VoipServer`, `TracerouteTarget`, `HealthProbe`) plus the two
+  global jobs, cross-referencing `scheduler.get_job(id)` for next-run/paused state and each type's
+  own latest result row for last-run/last-ok — there is deliberately no separate history table.
+  Per-target intervals stay editable only on each feature's own page (`WanTarget.interval_s` etc.);
+  the Scheduler page is a read-only overview to avoid a second, conflicting config surface.
 - `app/services/ping_manager.py` — one asyncio task per running `PingJob`. `bind_loop()` in the
   lifespan lets synchronous endpoints schedule tasks onto the main loop via
   `call_soon_threadsafe`. `resume_all()` on startup restarts jobs marked `running` in the DB.
@@ -184,6 +212,71 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   login), each returns a `HealthOutcome`. `HealthProbe.params_json` carries
   type-specific params. Scheduled via `sync_health_jobs()` (`health_probe_` prefix).
   CLI: `dns-test`, `health-check`.
+- `app/api/retransmission.py` (`/api/retransmission`) + `app/models/retransmission.py`
+  (`RetransmissionTest`/`RetransmissionTarget`/`RetransmissionTimelinePoint`/
+  `RetransmissionTargetConfig`) — `app/services/retransmission_service.py` supports two modes.
+  **Passive** (default): a short `dumpcap` window (via `capture_service.run_capture_window`)
+  analyzed with one `tshark -Y tcp` pass (`tcp.analysis.retransmission`); targets are
+  auto-discovered from observed retransmissions. **Active**: up to `MAX_ACTIVE_TARGETS` (10)
+  free-form `{host, port}` targets are resolved once (`resolve_active_target`, stdlib
+  `socket.gethostbyname` — same resolved IP feeds both the BPF filter and the connect probes, so
+  DNS round-robin can't split them) and TCP-connect-probed (`_probe_loop`/`_tcp_connect_probe`,
+  stdlib `socket` only, no payload — just the handshake) by a `_CaptureThread` running the capture
+  in parallel (same pattern as `voip_service._CaptureThread`), either concurrently
+  (`ThreadPoolExecutor`, full `duration_s` each) or sequentially (`duration_s` split evenly across
+  targets). TCP only — UDP is rejected (`SUPPORTED_ACTIVE_PROTOCOLS`), since
+  `tcp.analysis.retransmission` is TCP-specific and UDP loss is already covered by iperf3.
+  Active mode checks `ensure_tool(settings.dumpcap_bin)` immediately after creating the test row
+  and before starting any probing — fail fast on a missing tool instead of burning the full
+  `duration_s` on probes whose capture can never succeed. In both modes the pcap is deleted after
+  analysis, only the aggregation is persisted. Pure functions at the top of the file
+  (`parse_retransmission_lines`, `aggregate_retransmissions`, `compute_timeline`, `classify`) are
+  unit-testable without IO; `aggregate_retransmissions`' `configured` param (list of resolved
+  `(ip, port)`) switches it from passive auto-discovery (only targets with ≥1 retransmission) to
+  active mode (every configured target appears, including 0/0 if no traffic was ever captured for
+  it — placeholder entries are matched by IP only, not `(ip, port)`, to avoid duplicate rows when
+  the real port differs). `classify()` labels the likely cause (`LOCAL_NETWORK_ISSUE` /
+  `ISP_OR_WAN_LINK_ISSUE` / `REMOTE_SERVER_ISSUE` / `UPLINK_CONGESTION` / `DOWNLINK_CONGESTION` /
+  `UNKNOWN` / `OK`) from which affected targets are private vs. public IPs; direction
+  (upload/download) needs the interface's own IPv4 (best-effort via `ip -4 addr show`, falls back
+  to `unknown`). Threshold breaches (`retrans_warn_threshold_pct`/`retrans_alert_threshold_pct`)
+  only log + audit locally — intentionally no outbound webhook/email, to keep the "no cloud"
+  principle. Optional single periodic job via `scheduler_service.reschedule_retransmission()`
+  (`retrans_scheduled_interval_min`, 0 = off) on `capture_service.resolve_default_interface()` (`retrans_default_interface`, default `auto` = default-route iface; a missing/down configured iface also falls back to it — never read the raw setting as an interface) — scheduled runs are
+  always passive; active mode is manual/CLI-only for now. Report export reuses `report_service`
+  (`Report.retrans_test_id`, section `"retransmission"`, extra connection-stat columns when
+  `test_mode == "active"`) rather than a separate generator. `RetransmissionTargetConfig` rows are
+  saved target presets (reused across tests, `usage_count`/`last_used` bumped by
+  `api.retransmission._touch_target_configs` on active-test start by host+port match). CLI:
+  `retrans-test` (`--mode`, `--target`/`--targets`/`--target-id`, `--sequential`), `retrans-report`,
+  `retrans-monitor`, `retrans-target-add`/`-list`/`-delete`. See `docs/retransmissions.md`.
+- `app/api/diagnostics.py` (`/api/diagnostics`) + `app/models/diagnostics.py`
+  (`DiagnosticRun`/`DiagnosticPreset`) + `app/services/diagnostics_service.py` — Network
+  Diagnostics is a thin **orchestrator**, not a new test engine: every sub-test calls the
+  already-tested service directly (`wan_service.measure`, `mtu_service.discover_path_mtu`,
+  `traceroute_service.run`, `speedtest_service.run_speedtest`, `capture_service.analyze` for the
+  broadcast share, `retransmission_service.run_test(mode="active", targets=[...])` for TCP
+  retransmissions). Multiple diagnostic targets' retransmission checks are combined into **one**
+  active-mode call/capture (it already supports multiple targets) rather than one capture per
+  target. Sub-tests run concurrently via `ThreadPoolExecutor`; each DB-writing sub-test opens its
+  own `session_scope()` inside its worker function (a `Session` isn't thread-safe to share). Ping
+  results are never persisted as `WanResult` (that table's `target_id` is a NOT NULL FK to a saved
+  `WanTarget`, which ad-hoc diagnostic targets don't have) — they only live in the run's
+  `results_json` snapshot; MTU/Traceroute/Speedtest results persist normally in their own tables
+  (same construction as their respective API endpoints) and so also show up in those features'
+  own history. `classify_target()`/`classify_run()` are pure functions reusing the *existing*
+  threshold settings (`report_ping_loss_warn_pct`, `report_jitter_warn_ms`,
+  `retrans_warn_threshold_pct`/`retrans_alert_threshold_pct`, `report_mtu_info_below`,
+  `analysis_broadcast_warn_pct`) rather than a second, potentially-diverging threshold source;
+  only `diagnostics_ping_latency_warn_ms` is new (nothing else covered ping latency). A
+  completely failed retransmission sub-test (e.g. missing `dumpcap` — `RetransmissionTest` created
+  with `status="error"` and zero `RetransmissionTarget` rows) is surfaced as `results["retrans_error"]`
+  and escalates the overall status, instead of silently vanishing — a real bug caught via live
+  browser testing where a user-selected test produced no visible result on failure. No separate
+  history table per sub-test; `DiagnosticRun.results_json` is a JSON snapshot (like
+  `Report.data_json`) — sub-test results stay queryable in their own tables/pages. CLI:
+  `diagnostics-run` (`--target`, `--tests`), `diagnostics-preset-add`/`-list`/`-delete`. See
+  `docs/diagnostics.md`.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
   host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
   inputs. `iperf3` is added to the installer's apt list; the optional

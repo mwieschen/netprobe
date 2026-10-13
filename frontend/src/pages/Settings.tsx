@@ -8,6 +8,8 @@ interface Settings {
   speedtest_enabled: boolean;
   speedtest_interval_min: number;
   speedtest_server_id: number | null;
+  retrans_enabled: boolean;
+  retrans_scheduled_interval_min: number;
   capture_max_duration_s: number;
   capture_max_size_mb: number;
   ping_raw_retention_days: number;
@@ -37,6 +39,8 @@ export default function SettingsPage() {
         speedtest_enabled: settings!.speedtest_enabled,
         speedtest_interval_min: settings!.speedtest_interval_min,
         speedtest_server_id: settings!.speedtest_server_id,
+        retrans_enabled: settings!.retrans_enabled,
+        retrans_scheduled_interval_min: settings!.retrans_scheduled_interval_min,
       });
       setSettings(updated);
       setSaved(true);
@@ -66,6 +70,23 @@ export default function SettingsPage() {
           <div className="field"><label>Fester Server-ID (leer = Auto)</label>
             <input type="number" value={settings.speedtest_server_id ?? ""}
               onChange={(e) => setSettings({ ...settings, speedtest_server_id: e.target.value ? +e.target.value : null })} /></div>
+          <button className="primary" onClick={save}>Speichern</button>
+          {saved && <span className="badge ok" style={{ marginLeft: 10 }}>Gespeichert</span>}
+        </div>
+
+        <div className="card">
+          <h2>Geplantes Retransmission-Monitoring</h2>
+          <div className="field">
+            <label>
+              <input type="checkbox" checked={settings.retrans_enabled}
+                onChange={(e) => setSettings({ ...settings, retrans_enabled: e.target.checked })} /> Aktiviert
+            </label>
+          </div>
+          <div className="field"><label>Intervall (Minuten, 0 = aus)</label>
+            <input type="number" value={settings.retrans_scheduled_interval_min}
+              onChange={(e) => setSettings({ ...settings, retrans_scheduled_interval_min: +e.target.value })} /></div>
+          <p className="muted">Läuft auf dem in <code>NETPROBE_RETRANS_DEFAULT_INTERFACE</code>
+            konfigurierten Interface (Standard <code>auto</code> = Interface der Default-Route). Übersicht aller geplanten Tests: <a href="/scheduler">Scheduler</a>.</p>
           <button className="primary" onClick={save}>Speichern</button>
           {saved && <span className="badge ok" style={{ marginLeft: 10 }}>Gespeichert</span>}
         </div>

@@ -15,6 +15,7 @@ from app.core.timeutils import utcnow
 from app.db.session import get_db
 from app.models.health_check import HealthCheckResult, HealthProbe
 from app.models.ping import PingJob, PingSample
+from app.models.retransmission import RetransmissionTest
 from app.models.speedtest import SpeedtestResult
 from app.models.traceroute import Traceroute, TracerouteTarget
 from app.models.user import User
@@ -149,6 +150,20 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(get_curre
 
     active_pings = db.query(PingJob).filter(PingJob.status == "running").count()
 
+    latest_retrans = db.execute(
+        select(RetransmissionTest).order_by(RetransmissionTest.ts.desc()).limit(1)
+    ).scalar_one_or_none()
+    retransmission = None
+    if latest_retrans is not None:
+        retransmission = {
+            "id": latest_retrans.id,
+            "ts": latest_retrans.ts.isoformat(),
+            "interface": latest_retrans.interface,
+            "status": latest_retrans.status,
+            "rate_percent": latest_retrans.retransmission_rate_percent,
+            "classification": latest_retrans.classification,
+        }
+
     return {
         "latest_speedtest": SpeedtestOut.model_validate(latest_speed).model_dump()
         if latest_speed
@@ -160,6 +175,7 @@ def dashboard_summary(db: Session = Depends(get_db), _: User = Depends(get_curre
         },
         "active_ping_jobs": active_pings,
         "disruptions_24h": disruptions or 0,
+        "retransmission": retransmission,
     }
 
 

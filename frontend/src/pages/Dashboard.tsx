@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, DashboardHealth, Speedtest } from "../api";
+import { Link } from "react-router-dom";
+import { api, DashboardHealth, SchedulerStatus, Speedtest } from "../api";
 import { StatCard, Badge } from "../components/common";
 import { fmtDateTime, fmtNum, fmtBytes } from "../util";
 
@@ -34,6 +35,14 @@ interface Summary {
   };
   active_ping_jobs: number;
   disruptions_24h: number;
+  retransmission: {
+    id: number;
+    ts: string;
+    interface: string;
+    status: string;
+    rate_percent: number | null;
+    classification: string | null;
+  } | null;
 }
 
 interface TopoItem {
@@ -68,6 +77,7 @@ export default function Dashboard() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [topology, setTopology] = useState<Topology | null>(null);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
 
   useEffect(() => {
     const load = () => {
@@ -78,6 +88,7 @@ export default function Dashboard() {
         .get<{ events: TimelineEvent[] }>("/api/dashboard/timeline?hours=24")
         .then((d) => setTimeline(d.events))
         .catch(() => {});
+      api.get<SchedulerStatus>("/api/scheduler/status").then(setScheduler).catch(() => {});
     };
     load();
     const t = setInterval(load, 15000);
@@ -116,6 +127,31 @@ export default function Dashboard() {
           label="Störungen (24h)"
           value={summary?.disruptions_24h ?? 0}
           sub="WAN-Ausfälle/Timeouts"
+        />
+        <StatCard
+          label="TCP-Retransmissions"
+          value={
+            summary?.retransmission ? (
+              <Badge
+                ok={summary.retransmission.status !== "error" ? (summary.retransmission.rate_percent ?? 0) < 1 : null}
+                label={fmtNum(summary.retransmission.rate_percent, 2, "%")}
+              />
+            ) : (
+              "–"
+            )
+          }
+          sub={summary?.retransmission ? `${summary.retransmission.interface} · ${fmtDateTime(summary.retransmission.ts)}` : "kein Test"}
+        />
+        <StatCard
+          label="Scheduler"
+          value={scheduler ? <Badge ok={scheduler.enabled} label={scheduler.enabled ? "aktiv" : "pausiert"} /> : "–"}
+          sub={
+            scheduler ? (
+              <Link to="/scheduler">{scheduler.jobs.length} geplante Tests →</Link>
+            ) : (
+              ""
+            )
+          }
         />
         <StatCard
           label="System Health"

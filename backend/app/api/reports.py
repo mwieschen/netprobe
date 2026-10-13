@@ -36,6 +36,7 @@ def _to_out(report: Report) -> ReportOut:
         title=report.title,
         capture_id=report.capture_id,
         job_id=report.job_id,
+        retrans_test_id=report.retrans_test_id,
         customer=report.customer,
         location=report.location,
         notes=report.notes,

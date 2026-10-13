@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Geheimschlüssel für Cookie-Signierung. MUSS in Produktion gesetzt werden.
     secret_key: str = Field(default="change-me-in-production")
 
+    # --- Scheduler (globale Automatisierung) ---
+    # Startwert; zur Laufzeit per /api/scheduler/enable|disable im KV-Store überschrieben
+    # (siehe app.workers.scheduler.SchedulerService, analog zu speedtest_enabled).
+    scheduler_enabled: bool = True
+
     # --- Netzwerk / HTTP ---
     host: str = "127.0.0.1"
     port: int = 8000
@@ -55,6 +60,7 @@ class Settings(BaseSettings):
     ping_bin: str = "ping"
     dumpcap_bin: str = "dumpcap"
     tshark_bin: str = "tshark"
+    ip_bin: str = "ip"
 
     # --- Speedtest ---
     speedtest_interval_min: int = 60
@@ -90,6 +96,20 @@ class Settings(BaseSettings):
 
     # --- System-Health-Checks ---
     health_check_retention_days: int = 90
+
+    # --- TCP-Retransmission-Monitoring ---
+    retrans_enabled: bool = True
+    # "auto" = Interface der Default-Route; ein gesetztes, aber fehlendes/inaktives
+    # Interface fällt ebenfalls darauf zurück (capture_service.resolve_default_interface).
+    retrans_default_interface: str = "auto"
+    retrans_default_duration_s: int = 60
+    retrans_max_duration_s: int = 600  # 10 Minuten
+    retrans_retention_days: int = 90
+    # Schwellwerte für Warnungen/Alarme (Retransmission-Rate in %).
+    retrans_warn_threshold_pct: float = 0.5
+    retrans_alert_threshold_pct: float = 1.0
+    # Geplantes periodisches Monitoring auf retrans_default_interface (Minuten, 0 = aus).
+    retrans_scheduled_interval_min: int = 0
 
     # --- Traceroute / Geolocation ---
     mtr_bin: str = "mtr"
@@ -145,6 +165,16 @@ class Settings(BaseSettings):
     report_jitter_warn_ms: float = 30.0
     # Pfad-MTU, unter der auf mögliche PMTUD-/Fragmentierungsprobleme hingewiesen wird.
     report_mtu_info_below: int = 1500
+
+    # --- Network Diagnostics (Sammel-Test mehrerer Ziele) ---
+    # Alle übrigen Schwellwerte (Paketverlust, Jitter, Retransmission-Rate, MTU,
+    # Broadcast-Anteil) werden bewusst von den bereits existierenden Einstellungen
+    # oben wiederverwendet (report_ping_loss_warn_pct, report_jitter_warn_ms,
+    # retrans_warn_threshold_pct/retrans_alert_threshold_pct, report_mtu_info_below,
+    # analysis_broadcast_warn_pct) statt einer zweiten, potenziell abweichenden
+    # Schwellwert-Quelle. Nur die Ping-Latenz hat bislang noch keinen Schwellwert.
+    diagnostics_ping_latency_warn_ms: float = 100.0
+    diagnostics_max_targets: int = 10
 
     # --- Login / Rate Limiting ---
     login_rate_max_attempts: int = 5

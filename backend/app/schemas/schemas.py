@@ -275,12 +275,13 @@ class MtuTestOut(ORMModel):
 
 
 # --- Reports ---
-REPORT_SECTIONS = ("summary", "ping", "speedtest", "iperf3", "mtu", "passive")
+REPORT_SECTIONS = ("summary", "ping", "speedtest", "iperf3", "mtu", "passive", "retransmission")
 
 
 class ReportCreate(BaseModel):
     capture_id: int | None = None
     job_id: int | None = None
+    retrans_test_id: int | None = None
     customer: str = Field(default="", max_length=200)
     location: str = Field(default="", max_length=200)
     notes: str | None = Field(default=None, max_length=5000)
@@ -305,6 +306,7 @@ class ReportOut(ORMModel):
     title: str
     capture_id: int | None
     job_id: int | None
+    retrans_test_id: int | None
     customer: str
     location: str
     notes: str | None
@@ -554,11 +556,156 @@ class HealthProbeOut(HealthProbeBase):
     last_result: HealthCheckResultOut | None = None
 
 
+# --- TCP-Retransmission-Monitoring ---
+class RetransTargetIn(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    protocol: str = Field(default="tcp", pattern="^tcp$")
+    name: str | None = Field(default=None, max_length=128)
+
+
+class RetransStartRequest(BaseModel):
+    interface: str = Field(min_length=1, max_length=64)
+    duration_s: int = Field(default=60, ge=5, le=3600)
+    bpf: str | None = Field(default=None, max_length=512)
+    mode: str = Field(default="passive", pattern="^(passive|active)$")
+    targets: list[RetransTargetIn] = Field(default_factory=list, max_length=10)
+    concurrent: bool = True
+
+
+class RetransTargetOut(ORMModel):
+    target_ip: str
+    target_port: int | None
+    is_private: bool
+    retransmissions: int
+    packets: int
+    rate_percent: float
+    direction: str
+    first_seen: datetime | None
+    last_seen: datetime | None
+    connection_attempts: int | None
+    connection_errors: int | None
+    avg_connect_latency_ms: float | None
+
+
+class RetransTimelinePointOut(ORMModel):
+    t_offset_s: float
+    retrans_per_s: float
+    packets_per_s: float
+    rate_percent: float
+
+
+class RetransTestOut(ORMModel):
+    id: int
+    ts: datetime
+    source: str
+    interface: str
+    bpf: str | None
+    duration_s: int
+    test_mode: str
+    concurrent: bool
+    status: str
+    total_packets: int | None
+    tcp_packets: int | None
+    total_retransmissions: int | None
+    retransmission_rate_percent: float | None
+    classification: str | None
+    recommendation: str | None
+    error: str | None
+
+
+class RetransTestDetail(RetransTestOut):
+    targets: list[RetransTargetOut] = []
+    timeline: list[RetransTimelinePointOut] = []
+    configured_targets: list[dict] = []
+
+
+class RetransReportRequest(BaseModel):
+    customer: str = Field(default="", max_length=200)
+    location: str = Field(default="", max_length=200)
+    notes: str | None = Field(default=None, max_length=5000)
+
+
+# --- Gespeicherte Ziel-Presets für aktive Retransmission-Tests ---
+class RetransTargetConfigBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    protocol: str = Field(default="tcp", pattern="^tcp$")
+    description: str | None = Field(default=None, max_length=500)
+
+
+class RetransTargetConfigCreate(RetransTargetConfigBase):
+    pass
+
+
+class RetransTargetConfigOut(RetransTargetConfigBase, ORMModel):
+    id: int
+    created_at: datetime
+    last_used: datetime | None
+    usage_count: int
+
+
+# --- Network Diagnostics ---
+class DiagnosticTargetIn(BaseModel):
+    name: str | None = Field(default=None, max_length=128)
+    host: str = Field(min_length=1, max_length=255)
+
+
+class DiagnosticTestSelection(BaseModel):
+    ping: bool = True
+    retrans: bool = False
+    mtu: bool = False
+    broadcast: bool = False
+    traceroute: bool = False
+    speedtest: bool = False
+
+
+class DiagnosticRunRequest(BaseModel):
+    targets: list[DiagnosticTargetIn] = Field(default_factory=list, max_length=10)
+    tests: DiagnosticTestSelection = Field(default_factory=DiagnosticTestSelection)
+    interface: str = Field(min_length=1, max_length=64)
+    duration_s: int = Field(default=60, ge=5, le=3600)
+
+
+class DiagnosticRunOut(ORMModel):
+    id: int
+    ts: datetime
+    interface: str
+    duration_s: int
+    status: str
+    overall_status: str | None
+    targets: list[DiagnosticTargetIn]
+    tests: DiagnosticTestSelection
+    results: dict | None
+    error: str | None
+
+
+class DiagnosticPresetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    targets: list[DiagnosticTargetIn] = Field(default_factory=list, max_length=10)
+    tests: DiagnosticTestSelection = Field(default_factory=DiagnosticTestSelection)
+    interface: str = Field(min_length=1, max_length=64)
+    duration_s: int = Field(default=60, ge=5, le=3600)
+
+
+class DiagnosticPresetOut(ORMModel):
+    id: int
+    name: str
+    targets: list[DiagnosticTargetIn]
+    tests: DiagnosticTestSelection
+    interface: str
+    duration_s: int
+    created_at: datetime
+
+
 # --- Settings ---
 class SettingsOut(BaseModel):
     speedtest_enabled: bool
     speedtest_interval_min: int
     speedtest_server_id: int | None
+    retrans_enabled: bool
+    retrans_scheduled_interval_min: int
     capture_max_duration_s: int
     capture_max_size_mb: int
     ping_raw_retention_days: int
@@ -569,6 +716,28 @@ class SettingsUpdate(BaseModel):
     speedtest_enabled: bool | None = None
     speedtest_interval_min: int | None = Field(default=None, ge=0, le=1440)
     speedtest_server_id: int | None = None
+    retrans_enabled: bool | None = None
+    retrans_scheduled_interval_min: int | None = Field(default=None, ge=0, le=1440)
+
+
+# --- Scheduler (Übersicht & globale Automatisierung) ---
+class SchedulerJobOut(BaseModel):
+    id: str
+    type: str  # speedtest | retransmission | wan | voip | traceroute | health
+    label: str
+    target: str | None
+    enabled: bool
+    interval_seconds: int
+    paused: bool
+    next_run: datetime | None
+    last_run: datetime | None
+    last_ok: bool | None
+    page: str
+
+
+class SchedulerStatusOut(BaseModel):
+    enabled: bool
+    jobs: list[SchedulerJobOut]
 
 
 # --- Audit ---

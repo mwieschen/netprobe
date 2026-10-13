@@ -12,6 +12,7 @@ from app.core.timeutils import utcnow
 from app.db.session import session_scope
 from app.models.health_check import HealthCheckResult
 from app.models.ping import PingAggregate, PingSample
+from app.models.retransmission import RetransmissionTest
 from app.models.speedtest import SpeedtestResult
 from app.models.traceroute import GeoipCache, Traceroute
 from app.models.voip import VoipTest
@@ -99,6 +100,24 @@ def _prune_voip_captures(cutoff) -> None:
             pass
 
 
+def _prune_retransmission_captures(cutoff) -> None:
+    """Entfernt liegen gebliebene Retransmission-Mitschnitte (normalerweise
+    löscht ``run_test`` die PCAP sofort nach der Analyse; nur Reste nach einem
+    Absturz bleiben hier übrig)."""
+    from pathlib import Path
+
+    retrans_dir = Path(settings.capture_dir) / "retransmission"
+    if not retrans_dir.is_dir():
+        return
+    cutoff_ts = cutoff.timestamp()
+    for f in retrans_dir.glob("retrans_*.pcapng"):
+        try:
+            if f.stat().st_mtime < cutoff_ts:
+                f.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def cleanup_retention() -> None:
     """Löscht abgelaufene Rohdaten gemäß Retention-Konfiguration."""
     now = utcnow()
@@ -131,9 +150,15 @@ def cleanup_retention() -> None:
         hc_cutoff = now - timedelta(days=settings.health_check_retention_days)
         n8 = db.query(HealthCheckResult).filter(HealthCheckResult.ts < hc_cutoff).delete()
 
-        if n1 or n2 or n3 or n4 or n5 or n6 or n7 or n8:
+        retrans_cutoff = now - timedelta(days=settings.retrans_retention_days)
+        # Targets/Timeline hängen per ON DELETE CASCADE an retransmission_tests.
+        n9 = db.query(RetransmissionTest).filter(RetransmissionTest.ts < retrans_cutoff).delete()
+        _prune_retransmission_captures(retrans_cutoff)
+
+        if n1 or n2 or n3 or n4 or n5 or n6 or n7 or n8 or n9:
             log.info(
                 "Retention: %d Samples, %d Aggregate, %d Speedtests, %d WAN-Ergebnisse, "
-                "%d VoIP-Tests, %d Traceroutes, %d Geo-Cache-Einträge, %d Health-Ergebnisse gelöscht",
-                n1, n2, n3, n4, n5, n6, n7, n8,
+                "%d VoIP-Tests, %d Traceroutes, %d Geo-Cache-Einträge, %d Health-Ergebnisse, "
+                "%d Retransmission-Tests gelöscht",
+                n1, n2, n3, n4, n5, n6, n7, n8, n9,
             )

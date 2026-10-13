@@ -31,6 +31,7 @@ from app.models.iperf import IperfResult
 from app.models.mtu import MtuTest
 from app.models.ping import PingJob, PingSample
 from app.models.report import Report
+from app.models.retransmission import RetransmissionTest
 from app.models.speedtest import SpeedtestResult
 from app.models.wan import WanResult, WanTarget
 from app.services import capture_service
@@ -40,7 +41,9 @@ from app.services.parsers import compute_jitter
 log = get_logger("netprobe.report")
 
 # Auswählbare Report-Abschnitte (Reihenfolge = Darstellung).
-REPORT_SECTIONS: tuple[str, ...] = ("summary", "ping", "speedtest", "iperf3", "mtu", "passive")
+REPORT_SECTIONS: tuple[str, ...] = (
+    "summary", "ping", "speedtest", "iperf3", "mtu", "passive", "retransmission",
+)
 SECTION_LABELS = {
     "summary": "Zusammenfassung (Key Metrics)",
     "ping": "Ping & WAN-Qualität",
@@ -48,6 +51,7 @@ SECTION_LABELS = {
     "iperf3": "iperf3 (TCP/UDP)",
     "mtu": "MTU-Test",
     "passive": "Passive Analyse (PCAP)",
+    "retransmission": "TCP-Retransmissions",
 }
 _ACTIVE_SECTIONS = ("ping", "speedtest", "iperf3", "mtu")
 
@@ -143,6 +147,92 @@ def _resolve_source(db: Session, capture_id: int | None, job_id: int | None) -> 
         }
 
     raise ReportError("Es muss capture_id oder job_id angegeben werden.")
+
+
+# --------------------------------------------------------------------------- #
+# Retransmission-Test -> Snapshot (eigenständig, ohne PCAP-Grundanalyse)
+# --------------------------------------------------------------------------- #
+
+def _retrans_snapshot(db: Session, retrans_test_id: int) -> dict:
+    test = db.get(RetransmissionTest, retrans_test_id)
+    if test is None:
+        raise ReportError("Retransmission-Test nicht gefunden.")
+
+    mode_label = "Aktiv" if test.test_mode == "active" else "Passiv"
+    if test.test_mode == "active":
+        mode_label += " (parallel)" if test.concurrent else " (nacheinander)"
+    source = {
+        "kind": "Retransmission-Test",
+        "ref": f"#{test.id}",
+        "iface": test.interface,
+        "ts": _fmt_dt(test.ts),
+        "size": f"{test.duration_s} s · {mode_label}",
+        "bpf": test.bpf or "–",
+    }
+
+    rate = test.retransmission_rate_percent or 0.0
+    warn = rate >= settings.retrans_warn_threshold_pct
+    lvl = "warn" if warn else ("ok" if test.status == "done" else "na")
+    targets = sorted(test.targets, key=lambda t: t.retransmissions, reverse=True)
+
+    key_metrics = [
+        _km(
+            "Retransmission-Rate", _pct(rate, 2),
+            f'{_grp(test.total_retransmissions)} von {_grp(test.total_packets)} Paketen', lvl,
+        ),
+        _km(
+            "Klassifikation", test.classification or "–", "automatische Einordnung",
+            "warn" if test.classification not in (None, "OK") else "ok",
+        ),
+        _km("Interface", test.interface, test.bpf or "alle TCP-Pakete", "na"),
+    ]
+
+    interpretations: list[dict] = []
+    if test.error:
+        interpretations.append({"level": "warn", "text": f"Test fehlgeschlagen: {test.error}"})
+    if test.recommendation:
+        interpretations.append({"level": "warn" if warn else "info", "text": test.recommendation})
+    for t in targets[:10]:
+        kind = "LAN" if t.is_private else "WAN"
+        ref = f"{t.target_ip}:{t.target_port}" if t.target_port else t.target_ip
+        interpretations.append({
+            "level": "warn" if t.rate_percent >= settings.retrans_warn_threshold_pct else "info",
+            "text": f'{ref} ({kind}, {t.direction}): {_grp(t.retransmissions)} Retransmissions '
+                    f'({_pct(t.rate_percent)}).',
+        })
+
+    retransmission = {
+        "status": test.status,
+        "test_mode": test.test_mode,
+        "classification": test.classification,
+        "recommendation": test.recommendation,
+        "total_packets": test.total_packets,
+        "total_retransmissions": test.total_retransmissions,
+        "rate_percent": rate,
+        "targets": [
+            {
+                "ip": t.target_ip, "port": t.target_port, "is_private": t.is_private,
+                "retransmissions": t.retransmissions, "packets": t.packets,
+                "rate_percent": t.rate_percent, "direction": t.direction,
+                "connection_attempts": t.connection_attempts,
+                "connection_errors": t.connection_errors,
+                "avg_connect_latency_ms": t.avg_connect_latency_ms,
+            }
+            for t in targets
+        ],
+    }
+
+    return {
+        "generated": to_local(utcnow()).strftime("%Y-%m-%d %H:%M:%S %Z"),
+        "netprobe_version": __version__,
+        "source": source,
+        "sections": ["summary", "retransmission"],
+        "key_metrics": key_metrics,
+        "interpretations": interpretations,
+        "active": {},
+        "passive": None,
+        "retransmission": retransmission,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -459,8 +549,16 @@ def _build_interpretations(passive: dict | None, active: dict) -> list[dict]:
 # --------------------------------------------------------------------------- #
 
 def build_snapshot(
-    db: Session, *, capture_id: int | None, job_id: int | None, sections: list[str]
+    db: Session,
+    *,
+    capture_id: int | None,
+    job_id: int | None,
+    retrans_test_id: int | None = None,
+    sections: list[str],
 ) -> dict:
+    if retrans_test_id is not None:
+        return _retrans_snapshot(db, retrans_test_id)
+
     valid = [s for s in sections if s in SECTION_LABELS] or list(REPORT_SECTIONS)
     path, source = _resolve_source(db, capture_id, job_id)
 
@@ -494,14 +592,18 @@ def generate(
     location: str,
     notes: str | None,
     sections: list[str],
+    retrans_test_id: int | None = None,
 ) -> Report:
-    snapshot = build_snapshot(db, capture_id=capture_id, job_id=job_id, sections=sections)
+    snapshot = build_snapshot(
+        db, capture_id=capture_id, job_id=job_id, retrans_test_id=retrans_test_id, sections=sections
+    )
 
     title = f"netprobe-Report – {customer}" if customer else "netprobe-Report"
     report = Report(
         title=title,
         capture_id=capture_id,
         job_id=job_id,
+        retrans_test_id=retrans_test_id,
         customer=customer,
         location=location,
         notes=notes,
@@ -759,6 +861,52 @@ def _render_passive(p: dict, sections: list[str]) -> list[str]:
     return parts
 
 
+def _render_retransmission(r: dict) -> list[str]:
+    parts: list[str] = [f'<h2>{SECTION_LABELS["retransmission"]}</h2>']
+    parts.append(_rows(
+        ["Kennzahl", "Wert"],
+        [
+            ["Pakete gesamt", _grp(r["total_packets"])],
+            ["Retransmissions", _grp(r["total_retransmissions"])],
+            ["Rate", _pct(r["rate_percent"], 2)],
+            ["Klassifikation", r["classification"] or "–"],
+        ],
+    ))
+    if r.get("recommendation"):
+        parts.append(f'<div class="box info">{_e(r["recommendation"])}</div>')
+
+    active = r.get("test_mode") == "active"
+    parts.append("<h3>Getestete Ziele</h3>" if active else "<h3>Betroffene Ziele</h3>")
+    headers = ["Ziel", "Netz", "Richtung", "Retransmissions", "Pakete", "Rate"]
+    if active:
+        headers += ["Verbindungen", "Fehler", "Latenz ø"]
+    parts.append(_rows(
+        headers,
+        [
+            [
+                f'{t["ip"]}:{t["port"]}' if t["port"] else t["ip"],
+                "LAN" if t["is_private"] else "WAN",
+                t["direction"],
+                _grp(t["retransmissions"]),
+                _grp(t["packets"]),
+                _pct(t["rate_percent"], 2),
+                *(
+                    [
+                        _grp(t.get("connection_attempts")),
+                        _grp(t.get("connection_errors")),
+                        _de(t.get("avg_connect_latency_ms"), 1, "ms"),
+                    ]
+                    if active
+                    else []
+                ),
+            ]
+            for t in r["targets"][:30]
+        ],
+        num_from=3,
+    ))
+    return parts
+
+
 def render_report_html(report: Report, snapshot: dict) -> str:
     sections: list[str] = snapshot["sections"]
     src: dict = snapshot["source"]
@@ -796,6 +944,9 @@ def render_report_html(report: Report, snapshot: dict) -> str:
 
     if "passive" in sections and snapshot.get("passive"):
         parts.extend(_render_passive(snapshot["passive"], sections))
+
+    if "retransmission" in sections and snapshot.get("retransmission"):
+        parts.extend(_render_retransmission(snapshot["retransmission"]))
 
     if report.notes:
         parts.append("<h2>Notizen</h2>")

@@ -2,28 +2,17 @@
 
 ## Update
 
-netprobe wird durch erneutes Ausrollen des Quellcodes aktualisiert. Das
-Installationsscript ist idempotent und zerstört weder Datenbank noch Konfiguration.
-
 ```bash
-# Im entpackten/aktualisierten Repository:
-sudo ./install.sh
+sudo bash /opt/netprobe/install.sh                # Smart-Update: nur Geändertes, Snapshot vorher
+sudo bash /opt/netprobe/install.sh --rollback     # zurück auf den letzten Snapshot
 ```
 
-Alternativ manuell:
+Änderungserkennung, Snapshots, automatischer Rollback und alle Optionen:
+[`update.md`](update.md). Installation und Umgebungsvariablen:
+[`installation.md`](installation.md).
 
-```bash
-sudo systemctl stop netprobe
-sudo cp -r backend/app /opt/netprobe/backend/
-sudo cp -r backend/alembic /opt/netprobe/backend/
-sudo /opt/netprobe/venv/bin/pip install /opt/netprobe/backend
-# Frontend neu bauen und nach /opt/netprobe/frontend/dist kopieren
-sudo -u netprobe env NETPROBE_ENV_FILE=/etc/netprobe/netprobe.env \
-    /opt/netprobe/venv/bin/alembic -c /opt/netprobe/backend/alembic.ini upgrade head
-sudo systemctl start netprobe
-```
-
-Migrationen werden über Alembic eingespielt (`alembic upgrade head`).
+Installierte Version: `cat /opt/netprobe/.install-state/version`. Die Betriebsskripte
+liegen nach der Installation unter `/opt/netprobe/scripts/`.
 
 ## Backup
 
@@ -481,6 +470,85 @@ Dashboard-Kachel „System Health" (ok/Fehler, Namen der fehlschlagenden Prüfun
 Beides ist rein lesend/abgeleitet – keine eigene Tabelle. Die Dashboard-Seite
 zeigt daraus den Abschnitt *Netzwerk-Topologie* (Status-Badges je Ziel) und
 *Letzte Störungen (24 h)*.
+
+### 10. TCP-Retransmission-Monitoring
+
+Passiv (`dumpcap` + `tshark`-Analyse des laufenden Traffics) oder aktiv (gezielte
+TCP-Connect-Proben zu frei definierbaren Zielen, parallel zu einem auf diese
+Ziele gefilterten Mitschnitt). Klassifiziert in beiden Fällen die wahrscheinliche
+Ursache. Details, Beispiele und Interpretation der Klassifikation:
+[`docs/retransmissions.md`](retransmissions.md).
+
+| Endpoint | Auth | Zweck |
+|----------|------|-------|
+| `POST /api/retransmission/tests` | admin | Test starten (`interface`, `duration_s`, `mode` passive/active, bei active: `targets` max. 10 + `concurrent`, bei passive: optional `bpf`); blockiert bis zur Dauer des Mitschnitts |
+| `GET /api/retransmission/tests` | viewer | Historie (`days`, `limit`) |
+| `GET /api/retransmission/tests/<id>` | viewer | Details inkl. Ziele + Zeitreihe + `configured_targets` (nur aktiv) |
+| `DELETE /api/retransmission/tests/<id>` | admin | löschen |
+| `GET /api/retransmission/tests/<id>/correlation` | viewer | Abgleich mit Dauerping-/WAN-/Speedtest-Ergebnissen im Testfenster (± 5 min) |
+| `POST /api/retransmission/tests/<id>/report` | admin | Report über das bestehende Report-System erzeugen (HTML, optional PDF) |
+| `GET/POST /api/retransmission/targets` | viewer/admin | gespeicherte Ziel-Presets für aktive Tests (Name, Host, Port, Beschreibung) |
+| `DELETE /api/retransmission/targets/<id>` | admin | Ziel-Preset löschen |
+| `GET /api/retransmission/config` | viewer | konfigurierte Default-/Schwellwerte (inkl. `max_active_targets`) |
+
+Schwellwerte (`NETPROBE_RETRANS_WARN_THRESHOLD_PCT` 0.5 %, `NETPROBE_RETRANS_ALERT_THRESHOLD_PCT`
+1.0 %) erzeugen bei Überschreitung einen Log- und Audit-Eintrag (lokal, keine
+ausgehende Benachrichtigung). Optionales periodisches Monitoring (immer passiv)
+über `NETPROBE_RETRANS_SCHEDULED_INTERVAL_MIN` (0 = aus). Retention:
+`NETPROBE_RETRANS_RETENTION_DAYS` (90).
+
+**CLI:** `python -m app.cli retrans-test --interface eth0 --duration 60`
+· `retrans-test --mode active --target 1.1.1.1:443 --target 8.8.8.8:443`
+· `retrans-test --mode active --target-id 5 --sequential`
+· `retrans-target-add --name "Cloudflare DNS" --host 1.1.1.1 --port 443`
+· `retrans-target-list` · `retrans-target-delete --id 5`
+· `retrans-report --test-id 5 --output report.html`
+· `retrans-monitor --interface eth0` (Live-Schleife, Strg+C zum Beenden).
+
+**UI:** Seite *Retransmissions* – Historie, Detailansicht mit Zeitreihe und
+betroffenen Zielen (LAN/WAN-Badge, Richtung), Korrelationshinweis, Report-Export.
+Dashboard-Kachel zeigt den letzten Testlauf (Rate, Interface, Zeitpunkt).
+
+### 11. Scheduler: globale Automatisierung
+
+Eine Übersicht aller automatisch geplanten Tests (Speedtest, Retransmission-Monitoring,
+jedes WAN-/VoIP-/Traceroute-Ziel, jede Health-Probe) mit einem globalen
+Pause/Aktivieren-Schalter. Details, Design-Entscheidungen und Grenzen:
+[`docs/scheduler.md`](scheduler.md).
+
+| Endpoint | Auth | Zweck |
+|----------|------|-------|
+| `GET /api/scheduler/status` | viewer | alle Jobs mit Status/Intervall/nächstem+letztem Lauf |
+| `POST /api/scheduler/enable` \| `/disable` | admin | alle automatischen Läufe global pausieren/aktivieren (sofort, kein Neustart) |
+
+**CLI:** `python -m app.cli scheduler-status` · `scheduler-enable` · `scheduler-disable`.
+
+**UI:** Seite *Scheduler* – reine Übersicht mit Link zu jeder Feature-Seite;
+Intervalle für WAN/VoIP/Traceroute/Health bleiben dort editierbar, Speedtest/
+Retransmission unter *Einstellungen*.
+
+### 12. Network Diagnostics: mehrere Tests gebündelt zu mehreren Zielen
+
+Eine zentrale Seite für Ad-hoc-Checks: Ping, aktive TCP-Retransmissions, MTU,
+Broadcast-Anteil, Traceroute und Speedtest gebündelt zu bis zu 10 frei
+definierbaren Zielen, mit Ampel-Status (OK/WARN/KRITISCH) je Ziel und gesamt.
+Reine Orchestrierung bestehender Services – keine neue Test-Logik. Details,
+Design-Entscheidungen und Grenzen: [`docs/diagnostics.md`](diagnostics.md).
+
+| Endpoint | Auth | Zweck |
+|----------|------|-------|
+| `POST /api/diagnostics/run` | admin | Lauf starten (`targets` max. 10, `tests`, `interface`, `duration_s`); blockiert bis zur Dauer |
+| `GET /api/diagnostics/runs` | viewer | Historie (`days`, `limit`) |
+| `GET /api/diagnostics/runs/<id>` | viewer | Details inkl. voller Ergebnis-Snapshot |
+| `DELETE /api/diagnostics/runs/<id>` | admin | löschen |
+| `GET/POST /api/diagnostics/presets` | viewer/admin | gespeicherte Ziel-/Test-Auswahl |
+| `DELETE /api/diagnostics/presets/<id>` | admin | Preset löschen |
+
+**CLI:** `python -m app.cli diagnostics-run --interface eth0 --duration 60 --target Cloudflare:1.1.1.1 --tests ping,retrans,mtu`
+· `diagnostics-preset-add/-list/-delete`.
+
+**UI:** Seite *Netzwerk-Diagnose* – Ziel-Konfiguration mit Quick-Presets,
+Test-Auswahl, Ergebnis-Übersicht je Ziel, Historie, speicherbare Presets.
 
 ## Deinstallation
 

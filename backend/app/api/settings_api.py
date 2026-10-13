@@ -24,6 +24,10 @@ def _current(db: Session) -> SettingsOut:
             db, "speedtest_interval_min", settings.speedtest_interval_min
         ),
         speedtest_server_id=kvstore.get_value(db, "speedtest_server_id", settings.speedtest_server_id),
+        retrans_enabled=kvstore.get_value(db, "retrans_enabled", settings.retrans_enabled),
+        retrans_scheduled_interval_min=kvstore.get_value(
+            db, "retrans_scheduled_interval_min", settings.retrans_scheduled_interval_min
+        ),
         capture_max_duration_s=settings.capture_max_duration_s,
         capture_max_size_mb=settings.capture_max_size_mb,
         ping_raw_retention_days=settings.ping_raw_retention_days,
@@ -53,4 +57,5 @@ def update_settings(
                  detail=str(data), ip=client_ip(request))
     db.commit()
     scheduler_service.reschedule_speedtest()
+    scheduler_service.reschedule_retransmission()
     return _current(db)

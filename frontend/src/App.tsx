@@ -13,11 +13,15 @@ import MtuTestPage from "./pages/MtuTest";
 import VoipMonitorPage from "./pages/VoipMonitor";
 import TraceroutePage from "./pages/Traceroute";
 import HealthChecksPage from "./pages/HealthChecks";
+import NetworkDiagnosticsPage from "./pages/NetworkDiagnostics";
+import RetransmissionsPage from "./pages/Retransmissions";
+import SchedulerPage from "./pages/Scheduler";
 import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 
 const NAV = [
   { to: "/", label: "Dashboard", end: true },
+  { to: "/diagnostics", label: "Netzwerk-Diagnose" },
   { to: "/speedtest", label: "Speedtest" },
   { to: "/wan", label: "WAN-Tests" },
   { to: "/ping", label: "Dauerping" },
@@ -28,6 +32,8 @@ const NAV = [
   { to: "/voip-monitor", label: "VoIP / 3CX" },
   { to: "/traceroute", label: "Traceroute" },
   { to: "/health-checks", label: "System Health" },
+  { to: "/retransmissions", label: "Retransmissions" },
+  { to: "/scheduler", label: "Scheduler" },
   { to: "/settings", label: "Einstellungen" },
   { to: "/users", label: "Benutzer" },
 ];
@@ -62,6 +68,7 @@ export default function App() {
         </div>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/diagnostics" element={<NetworkDiagnosticsPage />} />
           <Route path="/speedtest" element={<SpeedtestPage />} />
           <Route path="/wan" element={<WanPage />} />
           <Route path="/ping" element={<PingPage />} />
@@ -73,6 +80,8 @@ export default function App() {
           <Route path="/voip-monitor" element={<VoipMonitorPage />} />
           <Route path="/traceroute" element={<TraceroutePage />} />
           <Route path="/health-checks" element={<HealthChecksPage />} />
+          <Route path="/retransmissions" element={<RetransmissionsPage />} />
+          <Route path="/scheduler" element={<SchedulerPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

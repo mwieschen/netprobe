@@ -56,6 +56,59 @@ def validate_dfilter(dfilter: str) -> str:
     return dfilter
 
 
+_SYS_NET = Path("/sys/class/net")
+# "unknown" melden manche virtuellen/Tunnel-Interfaces, obwohl sie Traffic führen.
+_USABLE_OPERSTATES = {"up", "unknown"}
+
+
+def _iface_usable(iface: str) -> bool:
+    """True, wenn das Interface existiert und nicht down ist. Ohne ``/sys/class/net``
+    (z. B. Entwicklungsrechner) wird nichts verworfen."""
+    if not _SYS_NET.is_dir():
+        return True
+    try:
+        state = (_SYS_NET / iface / "operstate").read_text().strip().lower()
+    except OSError:
+        return False
+    return state in _USABLE_OPERSTATES
+
+
+def default_route_interface() -> str | None:
+    """Interface der Default-Route (``ip route show default``), IPv4 vor IPv6.
+    Best effort – ``None``, wenn ``ip`` fehlt oder keine Default-Route existiert."""
+    for family in ("-4", "-6"):
+        try:
+            proc = run_sync([settings.ip_bin, family, "route", "show", "default"], timeout=10)
+        except (ToolNotFoundError, OSError):
+            return None
+        for line in proc.stdout.splitlines():
+            m = re.search(r"\bdev\s+(\S+)", line)
+            if m and _IFACE_RE.match(m.group(1)):
+                return m.group(1)
+    return None
+
+
+def resolve_default_interface(configured: str | None = None) -> str:
+    """Ermittelt das Standard-Capture-Interface.
+
+    ``configured`` (Standard: ``settings.retrans_default_interface``) wird verwendet,
+    wenn es explizit gesetzt ist, existiert und nicht down ist. Bei ``auto``/leer oder
+    einem fehlenden/inaktiven Interface (z. B. das frühere Default ``eth0`` auf Hosts
+    mit ``ens18``/``enp0s3``) wird das Interface der Default-Route genommen."""
+    cfg = (configured if configured is not None else settings.retrans_default_interface).strip()
+    explicit = bool(cfg) and cfg.lower() != "auto"
+    if explicit and _IFACE_RE.match(cfg) and _iface_usable(cfg):
+        return cfg
+    detected = default_route_interface()
+    if detected:
+        if explicit:
+            log.warning("Interface %r nicht vorhanden oder inaktiv – verwende %r (Default-Route)",
+                        cfg, detected)
+        return detected
+    # Letzter Ausweg: konfigurierten Wert behalten bzw. dumpcap-Pseudo-Interface "any".
+    return cfg if explicit else "any"
+
+
 def list_interfaces() -> list[dict]:
     """Listet Capture-Interfaces via ``dumpcap -D``."""
     try:

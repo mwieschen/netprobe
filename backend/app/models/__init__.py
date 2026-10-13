@@ -3,11 +3,18 @@
 from app.models.audit import AuditLog
 from app.models.capture import Capture
 from app.models.capture_job import CaptureJob
+from app.models.diagnostics import DiagnosticPreset, DiagnosticRun
 from app.models.health_check import HealthCheckResult, HealthProbe
 from app.models.iperf import IperfResult
 from app.models.mtu import MtuTest
 from app.models.ping import PingAggregate, PingJob, PingSample
 from app.models.report import Report
+from app.models.retransmission import (
+    RetransmissionTarget,
+    RetransmissionTargetConfig,
+    RetransmissionTest,
+    RetransmissionTimelinePoint,
+)
 from app.models.settings import AppSetting
 from app.models.speedtest import SpeedtestResult
 from app.models.traceroute import GeoipCache, Traceroute, TracerouteHop, TracerouteTarget
@@ -20,6 +27,8 @@ __all__ = [
     "AuditLog",
     "Capture",
     "CaptureJob",
+    "DiagnosticPreset",
+    "DiagnosticRun",
     "GeoipCache",
     "HealthCheckResult",
     "HealthProbe",
@@ -29,6 +38,10 @@ __all__ = [
     "PingJob",
     "PingSample",
     "Report",
+    "RetransmissionTarget",
+    "RetransmissionTargetConfig",
+    "RetransmissionTest",
+    "RetransmissionTimelinePoint",
     "SpeedtestResult",
     "Traceroute",
     "TracerouteHop",

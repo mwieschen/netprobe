@@ -6,6 +6,7 @@ Beispiele::
     python -m app.cli create-admin --username admin
     python -m app.cli ensure-admin        # nutzt NETPROBE_ADMIN_USER/PASSWORD
     python -m app.cli voip-test --server 3cx.example.com --port 5061
+    python -m app.cli retrans-test --interface eth0 --duration 60
 
 Der Entry-Point ``app.cli:main`` (siehe ``pyproject.toml``) bleibt gültig.
 """
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 import argparse
 
-from app.cli import admin, health, traceroute, voip
+from app.cli import admin, diagnostics, health, retransmission, scheduler, traceroute, voip
 
 
 def main() -> None:
@@ -61,6 +62,68 @@ def main() -> None:
     p_hc = sub.add_parser("health-check", help="Konfigurierte Health-Probes ausführen")
     p_hc.add_argument("--all", action="store_true", help="auch deaktivierte Probes")
 
+    p_rt = sub.add_parser("retrans-test", help="Einmaligen TCP-Retransmission-Test ausführen")
+    p_rt.add_argument("--interface", default=None,
+                       help="Capture-Interface (Standard: NETPROBE_RETRANS_DEFAULT_INTERFACE bzw. "
+                            "Interface der Default-Route)")
+    p_rt.add_argument("--duration", type=int, default=60, help="Mitschnitt-Dauer in Sekunden")
+    p_rt.add_argument("--bpf", help="Optionaler BPF-Filter (nur Modus 'passive', Standard: 'tcp')")
+    p_rt.add_argument("--mode", choices=("passive", "active"), default="passive")
+    p_rt.add_argument("--target", action="append", metavar="HOST:PORT",
+                       help="Aktives Ziel (mehrfach angebbar). Nur Modus 'active'.")
+    p_rt.add_argument("--targets", metavar="HOST:PORT,HOST:PORT,...",
+                       help="Kommagetrennte Liste aktiver Ziele. Nur Modus 'active'.")
+    p_rt.add_argument("--target-id", type=int, action="append", metavar="ID",
+                       help="Gespeichertes Ziel-Preset (mehrfach angebbar). Nur Modus 'active'.")
+    p_rt.add_argument("--sequential", action="store_true",
+                       help="Ziele nacheinander statt parallel testen (nur Modus 'active')")
+    p_rt.add_argument("--json", action="store_true", help="Ergebnis als JSON ausgeben")
+
+    p_rr = sub.add_parser("retrans-report", help="Report für einen Test exportieren")
+    p_rr.add_argument("--test-id", type=int, required=True)
+    p_rr.add_argument("--output", default="report.html", help="Zieldatei (.html oder .pdf)")
+
+    p_rm = sub.add_parser("retrans-monitor", help="Live-Monitoring (Strg+C zum Beenden)")
+    p_rm.add_argument("--interface", required=True, help="Capture-Interface (z. B. eth0)")
+    p_rm.add_argument("--duration", type=int, default=30, help="Dauer je Messintervall in Sekunden")
+
+    p_rta = sub.add_parser("retrans-target-add", help="Ziel-Preset für aktive Tests speichern")
+    p_rta.add_argument("--name", required=True)
+    p_rta.add_argument("--host", required=True, help="IP oder Hostname")
+    p_rta.add_argument("--port", type=int, required=True)
+    p_rta.add_argument("--description", default=None)
+
+    sub.add_parser("retrans-target-list", help="Gespeicherte Ziel-Presets anzeigen")
+
+    p_rtd = sub.add_parser("retrans-target-delete", help="Ziel-Preset löschen")
+    p_rtd.add_argument("--id", type=int, required=True)
+
+    sub.add_parser("scheduler-status", help="Status der globalen Automatisierung anzeigen")
+    sub.add_parser("scheduler-enable", help="Globale Automatisierung aktivieren")
+    sub.add_parser("scheduler-disable", help="Globale Automatisierung pausieren")
+
+    p_dr = sub.add_parser("diagnostics-run", help="Mehrere Tests gebündelt zu mehreren Zielen ausführen")
+    p_dr.add_argument("--interface", default=None,
+                       help="Capture-Interface (für retrans/broadcast)")
+    p_dr.add_argument("--duration", type=int, default=60, help="Dauer in Sekunden")
+    p_dr.add_argument("--target", action="append", metavar="[Name:]Host",
+                       help="Test-Ziel (mehrfach angebbar), z. B. Cloudflare:1.1.1.1 oder nur 1.1.1.1")
+    p_dr.add_argument("--tests", metavar="ping,retrans,mtu,broadcast,traceroute,speedtest",
+                       help="Kommagetrennte Liste (Standard: ping)")
+    p_dr.add_argument("--json", action="store_true", help="Ergebnis als JSON ausgeben")
+
+    p_dpa = sub.add_parser("diagnostics-preset-add", help="Ziel-/Test-Auswahl als Preset speichern")
+    p_dpa.add_argument("--name", required=True)
+    p_dpa.add_argument("--interface", default=None)
+    p_dpa.add_argument("--duration", type=int, default=60)
+    p_dpa.add_argument("--target", action="append", metavar="[Name:]Host")
+    p_dpa.add_argument("--tests", metavar="ping,retrans,mtu,broadcast,traceroute,speedtest")
+
+    sub.add_parser("diagnostics-preset-list", help="Gespeicherte Presets anzeigen")
+
+    p_dpd = sub.add_parser("diagnostics-preset-delete", help="Preset löschen")
+    p_dpd.add_argument("--id", type=int, required=True)
+
     args = parser.parse_args()
     if args.command == "init-db":
         admin.init_db()
@@ -78,6 +141,32 @@ def main() -> None:
         health.dns_test(args)
     elif args.command == "health-check":
         health.health_check(args)
+    elif args.command == "retrans-test":
+        retransmission.retrans_test(args)
+    elif args.command == "retrans-report":
+        retransmission.retrans_report(args)
+    elif args.command == "retrans-monitor":
+        retransmission.retrans_monitor(args)
+    elif args.command == "retrans-target-add":
+        retransmission.retrans_target_add(args)
+    elif args.command == "retrans-target-list":
+        retransmission.retrans_target_list(args)
+    elif args.command == "retrans-target-delete":
+        retransmission.retrans_target_delete(args)
+    elif args.command == "scheduler-status":
+        scheduler.scheduler_status(args)
+    elif args.command == "scheduler-enable":
+        scheduler.scheduler_enable(args)
+    elif args.command == "scheduler-disable":
+        scheduler.scheduler_disable(args)
+    elif args.command == "diagnostics-run":
+        diagnostics.diagnostics_run(args)
+    elif args.command == "diagnostics-preset-add":
+        diagnostics.diagnostics_preset_add(args)
+    elif args.command == "diagnostics-preset-list":
+        diagnostics.diagnostics_preset_list(args)
+    elif args.command == "diagnostics-preset-delete":
+        diagnostics.diagnostics_preset_delete(args)
 
 
 if __name__ == "__main__":

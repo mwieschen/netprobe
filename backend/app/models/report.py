@@ -13,8 +13,9 @@ class Report(Base):
     """Erzeugter Kunden-/Kollegen-Report (HTML, optional PDF).
 
     Die Dateien liegen unter ``<reports_dir>/<id>.html`` bzw. ``.pdf``. Es gibt
-    bewusst keine Fremdschlüssel auf Capture/CaptureJob – ein Report bleibt auch
-    dann gültig, wenn die zugrunde liegende Aufnahme später gelöscht wird.
+    bewusst keine Fremdschlüssel auf Capture/CaptureJob/RetransmissionTest – ein
+    Report bleibt auch dann gültig, wenn die zugrunde liegende Quelle später
+    gelöscht wird.
     """
 
     __tablename__ = "reports"
@@ -24,6 +25,7 @@ class Report(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     capture_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retrans_test_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     customer: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     location: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)

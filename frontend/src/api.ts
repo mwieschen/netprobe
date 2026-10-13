@@ -505,6 +505,7 @@ export interface Report {
   title: string;
   capture_id: number | null;
   job_id: number | null;
+  retrans_test_id: number | null;
   customer: string;
   location: string;
   notes: string | null;
@@ -531,6 +532,232 @@ export interface AuditEntry {
   action: string;
   detail: string | null;
   ip: string | null;
+}
+
+export type RetransClassification =
+  | "OK"
+  | "LOCAL_NETWORK_ISSUE"
+  | "ISP_OR_WAN_LINK_ISSUE"
+  | "REMOTE_SERVER_ISSUE"
+  | "UPLINK_CONGESTION"
+  | "DOWNLINK_CONGESTION"
+  | "UNKNOWN";
+
+export interface RetransTarget {
+  target_ip: string;
+  target_port: number | null;
+  is_private: boolean;
+  retransmissions: number;
+  packets: number;
+  rate_percent: number;
+  direction: "upload" | "download" | "both" | "unknown";
+  first_seen: string | null;
+  last_seen: string | null;
+  connection_attempts: number | null;
+  connection_errors: number | null;
+  avg_connect_latency_ms: number | null;
+}
+
+export interface RetransTimelinePoint {
+  t_offset_s: number;
+  retrans_per_s: number;
+  packets_per_s: number;
+  rate_percent: number;
+}
+
+export interface RetransTest {
+  id: number;
+  ts: string;
+  source: "manual" | "scheduled";
+  interface: string;
+  bpf: string | null;
+  duration_s: number;
+  test_mode: "passive" | "active";
+  concurrent: boolean;
+  status: "running" | "done" | "error";
+  total_packets: number | null;
+  tcp_packets: number | null;
+  total_retransmissions: number | null;
+  retransmission_rate_percent: number | null;
+  classification: RetransClassification | null;
+  recommendation: string | null;
+  error: string | null;
+}
+
+export interface RetransConfiguredTarget {
+  host: string;
+  ip: string;
+  port: number;
+}
+
+export interface RetransTestDetail extends RetransTest {
+  targets: RetransTarget[];
+  timeline: RetransTimelinePoint[];
+  configured_targets: RetransConfiguredTarget[];
+}
+
+export interface RetransConfig {
+  enabled: boolean;
+  default_interface: string;
+  default_duration_s: number;
+  max_duration_s: number;
+  warn_threshold_pct: number;
+  alert_threshold_pct: number;
+  scheduled_interval_min: number;
+  max_active_targets: number;
+}
+
+export interface RetransTargetConfig {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  protocol: "tcp";
+  description: string | null;
+  created_at: string;
+  last_used: string | null;
+  usage_count: number;
+}
+
+export interface RetransCorrelation {
+  window: { start: string; end: string };
+  ping_failure_count: number;
+  wan_failures: { target_id: number; ts: string; error: string | null }[];
+  speedtests: { ts: string; ok: boolean; download_mbps: number | null; upload_mbps: number | null }[];
+  correlated: boolean;
+}
+
+// --- Network Diagnostics ---
+export interface DiagnosticTarget {
+  name: string | null;
+  host: string;
+}
+
+export interface DiagnosticTestSelection {
+  ping: boolean;
+  retrans: boolean;
+  mtu: boolean;
+  broadcast: boolean;
+  traceroute: boolean;
+  speedtest: boolean;
+}
+
+export interface DiagnosticPingResult {
+  ok: boolean;
+  loss_pct: number | null;
+  rtt_min?: number | null;
+  rtt_avg: number | null;
+  rtt_max?: number | null;
+  jitter_ms: number | null;
+  error: string | null;
+}
+
+export interface DiagnosticRetransResult {
+  rate_percent: number;
+  retransmissions: number;
+  packets: number;
+  connection_errors: number | null;
+}
+
+export interface DiagnosticMtuResult {
+  target: string;
+  ok: boolean;
+  path_mtu: number | null;
+  min_mtu: number;
+  max_mtu: number;
+  probe_count: number;
+  error: string | null;
+}
+
+export interface DiagnosticTracerouteResult {
+  id: number;
+  completed: boolean;
+  dest_reached: boolean;
+  total_hops: number;
+  avg_latency_ms: number | null;
+  first_hop: string | null;
+  error: string | null;
+}
+
+export interface DiagnosticTargetResult {
+  name: string;
+  host: string;
+  ping: DiagnosticPingResult | null;
+  retrans: DiagnosticRetransResult | null;
+  mtu: DiagnosticMtuResult | null;
+  traceroute: DiagnosticTracerouteResult | null;
+  status: "OK" | "WARN" | "KRITISCH";
+  issues: string[];
+}
+
+export interface DiagnosticBroadcastResult {
+  frame_distribution: FrameDistribution | null;
+  warnings: AnalysisWarning[];
+  error: string | null;
+}
+
+export interface DiagnosticSpeedtestResult {
+  ok: boolean;
+  download_mbps: number | null;
+  upload_mbps: number | null;
+  ping_ms: number | null;
+  jitter_ms: number | null;
+  error: string | null;
+}
+
+export interface DiagnosticResults {
+  generated: string;
+  interface: string;
+  duration_s: number;
+  tests: DiagnosticTestSelection;
+  targets: DiagnosticTargetResult[];
+  broadcast: DiagnosticBroadcastResult | null;
+  speedtest: DiagnosticSpeedtestResult | null;
+  retrans_test_id: number | null;
+  retrans_error: string | null;
+  overall_status: "OK" | "WARN" | "KRITISCH";
+}
+
+export interface DiagnosticRun {
+  id: number;
+  ts: string;
+  interface: string;
+  duration_s: number;
+  status: "running" | "done" | "error";
+  overall_status: "OK" | "WARN" | "KRITISCH" | null;
+  targets: DiagnosticTarget[];
+  tests: DiagnosticTestSelection;
+  results: DiagnosticResults | null;
+  error: string | null;
+}
+
+export interface DiagnosticPreset {
+  id: number;
+  name: string;
+  targets: DiagnosticTarget[];
+  tests: DiagnosticTestSelection;
+  interface: string;
+  duration_s: number;
+  created_at: string;
+}
+
+export interface SchedulerJob {
+  id: string;
+  type: "speedtest" | "retransmission" | "wan" | "voip" | "traceroute" | "health";
+  label: string;
+  target: string | null;
+  enabled: boolean;
+  interval_seconds: number;
+  paused: boolean;
+  next_run: string | null;
+  last_run: string | null;
+  last_ok: boolean | null;
+  page: string;
+}
+
+export interface SchedulerStatus {
+  enabled: boolean;
+  jobs: SchedulerJob[];
 }
 
 export interface DashboardHealth {
