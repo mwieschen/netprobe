@@ -1,7 +1,45 @@
 #!/usr/bin/env bash
 #
-# netprobe Installationsscript für Ubuntu Server 22.04 / 24.04 / 26.04.
-# Idempotent: erneuter Aufruf zerstört weder Datenbank noch Konfiguration.
+# netprobe – selbstheilender Installer/Updater für Ubuntu Server 22.04 / 24.04 / 26.04.
+#
+# Ein Befehl für alles (ohne Rückfragen):
+#   curl -sSL https://raw.githubusercontent.com/youruser/netprobe/main/install.sh | sudo bash
+#   sudo bash install.sh                  # aus Release-Paket oder Repository-Checkout
+#
+# Der Installer erkennt selbst, was zu tun ist:
+#   - Keine Installation (/opt/netprobe/venv fehlt) -> Neuinstallation: Pakete, Benutzer,
+#     Verzeichnisse, venv, Konfiguration, Migrationen, Admin, systemd, nginx.
+#   - Bestehende Installation -> Smart-Update: vergleicht Backend-Code und Frontend (md5),
+#     Python-Abhängigkeiten (pyproject.toml), systemd-Unit und Migrationsstand
+#     (alembic current vs. heads) und spielt NUR Geändertes ein. Vorher immer ein
+#     Snapshot (Code + Konfiguration + DB); schlägt die Migration fehl, wird automatisch
+#     auf den Snapshot zurückgerollt. Ist alles aktuell, wird nichts neu gestartet.
+#   - Fehlende Teile (Pakete, Verzeichnisse, Konfiguration, Admin, Dienst) werden bei
+#     jedem Lauf ergänzt – der Installer ist beliebig oft ausführbar.
+#
+# Quelle: liegt das Skript in einem netprobe-Verzeichnis (Release-Paket mit RELEASE-Datei
+# oder Repository-Checkout), wird dieses verwendet. Per "curl | bash" wird die Quelle von
+# GitHub geladen: zuerst das neueste Release-Paket (Asset "netprobe.tar.gz", Frontend
+# vorgebaut, kein Node.js nötig), sonst das Quellarchiv des Branches (Frontend wird gebaut).
+#   NETPROBE_REPO=<owner>/<repo>   GitHub-Repository        (Default: youruser/netprobe)
+#   NETPROBE_REF=<branch|tag|sha>  bestimmter Stand statt "neuestes Release"
+#   NETPROBE_SOURCE_URL=<url>      beliebiges tar.gz (Release-Paket oder Quellarchiv)
+#   NETPROBE_ADMIN_USER / NETPROBE_ADMIN_PASSWORD   initialer Admin (sonst Zufallspasswort)
+#   NETPROBE_KEEP_SNAPSHOTS=<n>    aufbewahrte Update-Snapshots (Default: 5)
+# Bei "curl | sudo bash" Variablen hinter sudo setzen: ... | sudo NETPROBE_REF=v1.2 bash
+#
+# Optionen (bei "curl | bash": ... | sudo bash -s -- <optionen>):
+#   --rebuild-frontend   Frontend erzwingen (neu bauen bzw. dist neu einspielen)
+#   --run-migrations     alembic upgrade head erzwingen (inkl. Prüfung)
+#   --backup-only        nur Snapshot anlegen, sonst nichts ändern
+#   --rollback[=DIR]     auf den neuesten (oder angegebenen) Snapshot zurückrollen
+#   --list-backups       vorhandene Snapshots anzeigen
+#   --force              alle Komponenten neu einspielen (Update)
+#   --update             Update erzwingen (Fehler, wenn nichts installiert ist)
+#   --install            vollständige Neueinrichtung über eine bestehende Installation
+#                        (Daten + Konfiguration bleiben erhalten)
+#   --interactive        Admin-Passwort, Firewall und Netzwerk interaktiv abfragen
+#   -h, --help           diese Hilfe
 #
 set -euo pipefail
 
@@ -17,19 +55,89 @@ LOG_DIR="/var/log/netprobe"
 ETC_DIR="/etc/netprobe"
 ENV_FILE="${ETC_DIR}/netprobe.env"
 VENV_DIR="${APP_DIR}/venv"
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Per "curl | bash" gibt es keine Skriptdatei (BASH_SOURCE leer) -> SRC_DIR bleibt leer
+# und bootstrap_source() lädt die Quelle herunter.
+SRC_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+# Zustandsdateien des Installers (Version, Hash der Python-Abhängigkeiten,
+# Hash der Frontend-Quellen, Hashes der zuletzt ausgelieferten Konfigurationsdateien).
+STATE_DIR="${APP_DIR}/.install-state"
+# Update-Snapshots (Code + Konfiguration + DB), je Lauf ein Unterverzeichnis.
+SNAPSHOT_ROOT="${DATA_DIR}/backups"
+KEEP_SNAPSHOTS="${NETPROBE_KEEP_SNAPSHOTS:-5}"
+
+NETPROBE_REPO="${NETPROBE_REPO:-youruser/netprobe}"
+NETPROBE_REF="${NETPROBE_REF:-}"
+NETPROBE_SOURCE_URL="${NETPROBE_SOURCE_URL:-}"
+
+# Wird in choose_mode() gesetzt: "install" oder "update".
+MODE=""
+# 1 = vorgebautes Frontend aus dem Release-Paket, 0 = Frontend wird gebaut.
+FRONTEND_PREBUILT=0
+NEW_VERSION=""
+BOOTSTRAP_DIR=""
+
+# Optionen
+INTERACTIVE=0
+OPT_REBUILD_FRONTEND=0
+OPT_RUN_MIGRATIONS=0
+OPT_BACKUP_ONLY=0
+OPT_FORCE=0
+OPT_ROLLBACK=""        # "" = nein, "latest" oder Snapshot-Verzeichnis
+OPT_LIST_BACKUPS=0
+
+# Ergebnis der Änderungserkennung (plan_update)
+CHANGED_BACKEND=0
+CHANGED_DEPS=0
+CHANGED_FRONTEND=0
+CHANGED_UNIT=0
+MIGRATIONS_PENDING=0
+MIGRATION_FROM=""
+MIGRATION_TO=""
+VENV_BROKEN=0
+SNAPSHOT_DIR=""
+# Wird von setup_admin() gesetzt, wenn ein Zufallspasswort erzeugt wurde (nur Ausgabe
+# in der Zusammenfassung, niemals in eine Datei oder ein Log).
+GENERATED_ADMIN_USER=""
+GENERATED_ADMIN_PASS=""
 
 C_OK="\033[0;32m"; C_WARN="\033[0;33m"; C_ERR="\033[0;31m"; C_INFO="\033[0;36m"; C_RST="\033[0m"
+C_BOLD="\033[1m"
 log()  { echo -e "${C_INFO}[netprobe]${C_RST} $*"; }
 ok()   { echo -e "${C_OK}[  ok  ]${C_RST} $*"; }
 warn() { echo -e "${C_WARN}[ warn ]${C_RST} $*"; }
 die()  { echo -e "${C_ERR}[ fehler ]${C_RST} $*" >&2; exit 1; }
 
+STEP=0
+STEPS_TOTAL=0
+step() {
+    STEP=$((STEP + 1))
+    echo
+    echo -e "${C_BOLD}${C_INFO}==> [${STEP}/${STEPS_TOTAL}] $*${C_RST}"
+}
+
+# Prüft freien Speicher auf dem Dateisystem von <pfad>; bricht mit Meldung ab.
+require_space() {
+    local path="$1" need_mb="$2" what="$3" free_mb
+    while [ ! -e "$path" ]; do path="$(dirname "$path")"; done
+    free_mb="$(df -Pm "$path" | awk 'NR==2 {print $4}')"
+    if [ "${free_mb:-0}" -lt "$need_mb" ]; then
+        die "Zu wenig freier Speicher für ${what} auf $(df -P "$path" | awk 'NR==2 {print $6}') (${free_mb} MB frei, benötigt: ${need_mb} MB)."
+    fi
+}
+
 export DEBIAN_FRONTEND=noninteractive
 
 # Wird in detect_os() gesetzt: Codename für Drittanbieter-Repos (Ookla, NodeSource).
-# Für sehr neue Ubuntu-Versionen, die dort noch nicht geführt werden, wird auf die
-# jeweils letzte unterstützte LTS zurückgefallen.
+# Ookla führt unter packagecloud.io/ookla/speedtest-cli/ubuntu derzeit WEDER 'noble'
+# (24.04) NOCH 'resolute' (26.04) - beide Codenamen liefern dort keine Release-Datei,
+# wodurch "apt-get update" mit "does not have a Release file" hart fehlschlägt (und mit
+# set -e die gesamte Installation abbricht - auch bei jedem künftigen Aufruf, bis die
+# fehlerhafte Paketquelle wieder entfernt wird). Für 24.04/26.04 wird deshalb auf die
+# letzte von Ookla sicher geführte LTS (jammy/22.04) zurückgefallen; NodeSource erkennt
+# den Codename selbst und braucht diesen Fallback nicht.
 UBUNTU_VERSION_ID=""
 UBUNTU_CODENAME=""
 REPO_CODENAME=""
@@ -49,15 +157,17 @@ detect_os() {
             REPO_CODENAME="${UBUNTU_CODENAME:-jammy}"
             ok "Ubuntu ${UBUNTU_VERSION_ID} (${REPO_CODENAME}) erkannt." ;;
         24.04)
-            REPO_CODENAME="${UBUNTU_CODENAME:-noble}"
-            ok "Ubuntu ${UBUNTU_VERSION_ID} (${REPO_CODENAME}) erkannt." ;;
+            # Ookla führt 'noble' nicht -> jammy-Fallback (siehe Kommentar oben).
+            REPO_CODENAME="jammy"
+            ok "Ubuntu ${UBUNTU_VERSION_ID} (${UBUNTU_CODENAME:-noble}) erkannt."
+            warn "Für Ookla wird der 22.04-Fallback ('${REPO_CODENAME}') verwendet, da deren Repo '${UBUNTU_CODENAME:-noble}' nicht führt." ;;
         26.04)
-            # 26.04 wird von Ookla/NodeSource ggf. noch nicht geführt -> 24.04 LTS als Repo-Fallback.
-            REPO_CODENAME="noble"
+            # Ookla führt 'resolute' nicht -> jammy-Fallback (siehe Kommentar oben).
+            REPO_CODENAME="jammy"
             ok "Ubuntu ${UBUNTU_VERSION_ID} (${UBUNTU_CODENAME:-unbekannt}) erkannt."
-            warn "Für Drittanbieter-Repos wird der 24.04-Fallback ('${REPO_CODENAME}') verwendet, falls 26.04 dort fehlt." ;;
+            warn "Für Ookla wird der 22.04-Fallback ('${REPO_CODENAME}') verwendet, da deren Repo 26.04 noch nicht führt." ;;
         *)
-            REPO_CODENAME="noble"
+            REPO_CODENAME="jammy"
             warn "Ubuntu ${UBUNTU_VERSION_ID:-?} ist ungetestet (unterstützt: 22.04, 24.04, 26.04)."
             warn "Nutze Repo-Fallback '${REPO_CODENAME}'; die Installation wird dennoch versucht." ;;
     esac
@@ -68,27 +178,30 @@ detect_os() {
 # ---------------------------------------------------------------------------
 check_prereqs() {
     log "Prüfe Vorbedingungen…"
-
-    [ "$(id -u)" -eq 0 ] || die "Bitte als root ausführen (sudo ./install.sh)."
     detect_os
 
     log "Prüfe Internetverbindung…"
-    if ! curl -fsS --max-time 10 https://deb.debian.org >/dev/null 2>&1 && \
+    if ! curl -fsS --max-time 10 https://pypi.org >/dev/null 2>&1 && \
        ! curl -fsS --max-time 10 https://archive.ubuntu.com >/dev/null 2>&1; then
-        die "Keine Internetverbindung. Für die Installation werden Pakete benötigt."
+        if [ "$MODE" = "install" ]; then
+            die "Keine Internetverbindung. Für die Installation werden Pakete benötigt."
+        fi
+        warn "Keine Internetverbindung – Update läuft weiter, solange keine neuen Pakete nötig sind."
+    else
+        ok "Internetverbindung vorhanden."
     fi
-    ok "Internetverbindung vorhanden."
 
-    # Freier Speicher (mind. 2 GB auf / )
-    local free_mb
+    # Freier Speicher (Neuinstallation mind. 2 GB, Update mind. 500 MB auf / )
+    local free_mb need_mb=2048
+    [ "$MODE" = "update" ] && need_mb=500
     free_mb=$(df -Pm / | awk 'NR==2 {print $4}')
-    if [ "${free_mb:-0}" -lt 2048 ]; then
-        die "Zu wenig freier Speicher auf / (${free_mb} MB, benötigt: 2048 MB)."
+    if [ "${free_mb:-0}" -lt "$need_mb" ]; then
+        die "Zu wenig freier Speicher auf / (${free_mb} MB, benötigt: ${need_mb} MB)."
     fi
     ok "Freier Speicher: ${free_mb} MB."
 
     # Port-80-Konflikt (außer durch nginx selbst)
-    if ss -ltnp 2>/dev/null | grep -q ':80 '; then
+    if [ "$MODE" = "install" ] && ss -ltnp 2>/dev/null | grep -q ':80 '; then
         if ! ss -ltnp 2>/dev/null | grep ':80 ' | grep -q 'nginx'; then
             warn "Port 80 ist bereits durch einen anderen Dienst belegt. nginx kann nicht starten."
             warn "Bitte den Konflikt auflösen oder den anderen Dienst stoppen."
@@ -96,33 +209,78 @@ check_prereqs() {
     fi
 }
 
+# Entfernt eine von einem früheren Lauf hinterlassene, ungültige Ookla-Paketquelle
+# (falscher, von Ookla nicht geführter Codename wie 'noble'/'resolute'), BEVOR
+# apt-get update aufgerufen wird. Eine solche Quelle lässt "apt-get update" dauerhaft
+# mit "does not have a Release file" fehlschlagen - bei JEDEM künftigen Aufruf, nicht
+# nur hier, UNABHÄNGIG davon ob speedtest zwischenzeitlich über das Tarball-Fallback
+# installiert wurde. Erkennung daher über den Dateiinhalt (enthält er NICHT den
+# aktuell korrekten Codename 'jammy', ist er veraltet/falsch) statt über den
+# Installationsstatus von speedtest - so bleibt eine bereits funktionierende Quelle
+# (z. B. auf 22.04, wo Ookla den nativen Codename 'jammy' ohnehin führt) unberührt,
+# während eine kaputte Quelle auch dann entfernt wird, wenn speedtest längst per
+# Tarball läuft.
+cleanup_stale_ookla_repo() {
+    shopt -s nullglob
+    local f list_files=(/etc/apt/sources.list.d/*ookla*.list)
+    for f in "${list_files[@]}"; do
+        grep -q "jammy" "$f" 2>/dev/null && continue
+        rm -f "$f"
+        rm -f /etc/apt/keyrings/*ookla*.gpg /usr/share/keyrings/*ookla*.gpg \
+            /etc/apt/trusted.gpg.d/*ookla*.gpg
+    done
+    shopt -u nullglob
+}
+
 # ---------------------------------------------------------------------------
 # 2. Pakete installieren
 # ---------------------------------------------------------------------------
+APT_PACKAGES=(
+    python3 python3-venv python3-dev
+    build-essential
+    nginx
+    sqlite3
+    tshark wireshark-common
+    fping iputils-ping mtr-tiny traceroute iperf3
+    curl jq tar ca-certificates gnupg lsb-release ssl-cert
+    libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core
+)
+
+# Gibt die noch nicht installierten Pakete aus APT_PACKAGES aus.
+_missing_packages() {
+    local p
+    for p in "${APT_PACKAGES[@]}"; do
+        dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed" || echo "$p"
+    done
+}
+
 install_packages() {
-    log "Aktualisiere Paketquellen…"
-    apt-get update -qq
+    local missing
+    missing="$(_missing_packages | tr '\n' ' ')"
+    if [ -z "${missing// /}" ]; then
+        # Alles vorhanden -> kein "apt-get update", kein Download (schnelles Update).
+        ok "Alle Systempakete bereits installiert."
+    else
+        cleanup_stale_ookla_repo
+        log "Aktualisiere Paketquellen…"
+        apt-get update -qq
 
-    log "Installiere Systempakete…"
-    # wireshark-common vorab so konfigurieren, dass dumpcap durch Nicht-root
-    # nutzbar ist (setuid für Nutzer der Gruppe 'wireshark').
-    echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
-    # iperf3 NICHT automatisch als Daemon starten (die netprobe-UI steuert den Server).
-    echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
+        log "Installiere fehlende Systempakete: ${missing}"
+        # wireshark-common vorab so konfigurieren, dass dumpcap durch Nicht-root
+        # nutzbar ist (setuid für Nutzer der Gruppe 'wireshark').
+        echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
+        # iperf3 NICHT automatisch als Daemon starten (die netprobe-UI steuert den Server).
+        echo "iperf3 iperf3/start_daemon boolean false" | debconf-set-selections
+        # shellcheck disable=SC2086
+        apt-get install -y -qq $missing
+        ok "Systempakete installiert."
+    fi
 
-    apt-get install -y -qq \
-        python3 python3-venv python3-dev \
-        build-essential \
-        nginx \
-        sqlite3 \
-        tshark wireshark-common \
-        fping iputils-ping mtr-tiny traceroute iperf3 \
-        curl jq tar ca-certificates gnupg lsb-release ssl-cert \
-        libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core
-
-    ok "Systempakete installiert."
     ensure_python
-    install_nodejs
+    # Node.js wird nur gebraucht, wenn das Frontend auf dem Server gebaut werden muss.
+    if [ "$FRONTEND_PREBUILT" -eq 0 ] && [ "$CHANGED_FRONTEND" -eq 1 ]; then
+        install_nodejs
+    fi
     install_speedtest
 }
 
@@ -185,9 +343,9 @@ install_speedtest() {
     fi
     log "Installiere offizielle Ookla Speedtest CLI…"
 
-    # 1) APT-Repository (packagecloud). Der Codename wird auf REPO_CODENAME
-    #    gesetzt, damit auf 26.04 der 24.04-Fallback ('noble') genutzt wird,
-    #    solange Ookla 26.04 nicht führt. Das Skript honoriert os/dist.
+    # 1) APT-Repository (packagecloud). Der Codename wird auf REPO_CODENAME gesetzt
+    #    (siehe detect_os(): jammy-Fallback auf 24.04/26.04, da Ookla dort aktuell
+    #    keine Release-Datei führt). Das Skript honoriert os/dist.
     if curl -fsSL https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh \
         | os=ubuntu dist="${REPO_CODENAME}" bash - >/dev/null 2>&1; then
         apt-get install -y -qq speedtest >/dev/null 2>&1 || true
@@ -196,6 +354,9 @@ install_speedtest() {
     # 2) Fallback: offizielles Tarball direkt von Ookla installieren.
     if ! command -v speedtest >/dev/null 2>&1; then
         warn "APT-Installation der Speedtest CLI fehlgeschlagen; versuche offizielles Tarball…"
+        # Angelegte, aber nicht funktionsfähige Paketquelle wieder entfernen, damit sie
+        # nicht jeden künftigen "apt-get update" bricht (siehe cleanup_stale_ookla_repo()).
+        cleanup_stale_ookla_repo
         install_speedtest_tarball || true
     fi
 
@@ -302,47 +463,178 @@ setup_user_dirs() {
 # ---------------------------------------------------------------------------
 # 4. Anwendung ausrollen
 # ---------------------------------------------------------------------------
-deploy_app() {
-    log "Kopiere Anwendungsdateien nach ${APP_DIR}…"
-    mkdir -p "$APP_DIR/backend" "$APP_DIR/frontend"
-    # rsync bewahrt keine venv/dist; wir kopieren Quellcode selektiv.
-    cp -r "$SRC_DIR/backend/app" "$APP_DIR/backend/"
-    cp -r "$SRC_DIR/backend/alembic" "$APP_DIR/backend/"
-    cp "$SRC_DIR/backend/alembic.ini" "$APP_DIR/backend/"
-    cp "$SRC_DIR/backend/pyproject.toml" "$APP_DIR/backend/"
+# Pfade (relativ zum Quell- bzw. Installationsverzeichnis), die zum "Backend" gehören.
+# Gleiche relative Struktur unter SRC_DIR und APP_DIR -> direkt per md5 vergleichbar.
+BACKEND_PATHS=(backend/app backend/alembic backend/alembic.ini backend/pyproject.toml
+               scripts/backup.sh scripts/restore.sh scripts/fix-permissions.sh)
 
-    log "Erstelle virtuelle Python-Umgebung…"
-    if [ ! -d "$VENV_DIR" ]; then
-        python3 -m venv "$VENV_DIR"
-    fi
-    "$VENV_DIR/bin/pip" install --quiet --upgrade pip
-    "$VENV_DIR/bin/pip" install --quiet "$APP_DIR/backend"
-    ok "Python-Abhängigkeiten installiert."
-
-    # WeasyPrint (Extra "pdf") für die PDF-Erzeugung von Reports – optional.
-    # Die Pango-Systembibliotheken werden in install_packages() mitinstalliert.
-    if "$VENV_DIR/bin/pip" install --quiet "$APP_DIR/backend[pdf]" 2>/dev/null; then
-        ok "WeasyPrint installiert (Report-PDF verfügbar)."
-    else
-        warn "WeasyPrint nicht installiert; Reports werden nur als HTML erzeugt."
-    fi
-
-    build_frontend
-    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+# md5 über einen Dateibaum: relative Pfade + Inhalte, ohne Bytecode-Caches. Fehlende
+# Pfade werden ignoriert (fehlt die Installation, unterscheidet sich der Hash).
+_tree_md5() {
+    local base="$1"; shift
+    (
+        cd "$base" 2>/dev/null || exit 0
+        find "$@" -type f ! -path '*/__pycache__/*' ! -name '*.pyc' \
+            ! -path '*/node_modules/*' ! -path './dist/*' 2>/dev/null \
+            | LC_ALL=C sort | xargs -r -d '\n' md5sum
+    ) | md5sum | cut -d' ' -f1
 }
 
-build_frontend() {
-    log "Baue Frontend (Vite)…"
-    local build_dir
-    build_dir="$(mktemp -d)"
-    cp -r "$SRC_DIR/frontend/." "$build_dir/"
-    ( cd "$build_dir" && npm ci --silent 2>/dev/null || npm install --silent )
-    ( cd "$build_dir" && npm run build --silent )
+# Hash der Frontend-Quellen eines Repository-Checkouts (ohne node_modules/dist).
+_frontend_src_md5() { _tree_md5 "$SRC_DIR/frontend" .; }
+
+backend_code_changed() {
+    [ "$(_tree_md5 "$SRC_DIR" "${BACKEND_PATHS[@]}")" != "$(_tree_md5 "$APP_DIR" "${BACKEND_PATHS[@]}")" ]
+}
+
+frontend_code_changed() {
+    [ -f "$APP_DIR/frontend/dist/index.html" ] || return 0
+    if [ "$FRONTEND_PREBUILT" -eq 1 ]; then
+        # Release-Paket: vorgebautes dist direkt mit dem installierten vergleichen.
+        [ "$(_tree_md5 "$SRC_DIR/frontend" dist)" != "$(_tree_md5 "$APP_DIR/frontend" dist)" ]
+    else
+        # Repository-Checkout: Quell-Hash mit dem Hash des zuletzt gebauten Stands vergleichen.
+        [ "$(_frontend_src_md5)" != "$(cat "$STATE_DIR/frontend-src.md5" 2>/dev/null)" ]
+    fi
+}
+
+python_deps_changed() {
+    [ "$VENV_BROKEN" -eq 1 ] && return 0
+    [ "$(sha256sum "$SRC_DIR/backend/pyproject.toml" | cut -d' ' -f1)" \
+        != "$(cat "$STATE_DIR/deps.sha256" 2>/dev/null)" ]
+}
+
+systemd_unit_changed() {
+    [ "$(sha256sum < "$SRC_DIR/deploy/systemd/netprobe.service")" \
+        != "$(sha256sum < /etc/systemd/system/netprobe.service 2>/dev/null)" ]
+}
+
+venv_healthy() {
+    [ -x "$VENV_DIR/bin/python" ] && \
+        "$VENV_DIR/bin/python" -c 'import fastapi, sqlalchemy, alembic, gunicorn' >/dev/null 2>&1
+}
+
+# --- Alembic-Migrationsstand ------------------------------------------------
+# Revisionen aus der alembic-Ausgabe ("0013_xyz (head)") -> sortierte Liste.
+_alembic_revs() { awk '{print $1}' | grep -E '^[A-Za-z0-9_]+$' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
+
+# Aktueller DB-Stand (als Dienstbenutzer, damit keine root-eigenen WAL-Dateien entstehen).
+alembic_current() {
+    ( cd "$APP_DIR/backend" && sudo -u "$APP_USER" env NETPROBE_ENV_FILE="$ENV_FILE" \
+        PYTHONDONTWRITEBYTECODE=1 "$VENV_DIR/bin/alembic" current 2>/dev/null ) | _alembic_revs
+}
+
+# Ziel-Revisionen eines Backend-Verzeichnisses ("alembic heads" liest nur die Skripte,
+# verbindet sich nicht mit der DB).
+alembic_heads() {
+    ( cd "$1" && PYTHONDONTWRITEBYTECODE=1 "$VENV_DIR/bin/alembic" heads 2>/dev/null ) | _alembic_revs
+}
+
+# 0 = Migrationen ausstehend (DB-Stand != heads des angegebenen Backends).
+migrations_pending() {
+    local backend_dir="${1:-$APP_DIR/backend}"
+    MIGRATION_FROM="$(alembic_current || true)"
+    MIGRATION_TO="$(alembic_heads "$backend_dir" || true)"
+    [ -z "$MIGRATION_TO" ] && return 0        # unbekannt -> sicherheitshalber migrieren
+    [ "$MIGRATION_FROM" != "$MIGRATION_TO" ]
+}
+
+deploy_backend() {
+    log "Spiele Backend-Code nach ${APP_DIR} ein…"
+    mkdir -p "$APP_DIR/backend" "$APP_DIR/frontend" "$STATE_DIR"
+    # Verzeichnisse komplett ersetzen (nicht drüberkopieren), damit gelöschte Module
+    # oder Migrationen aus Vorversionen nicht als Altlast liegen bleiben.
+    rm -rf "$APP_DIR/backend/app" "$APP_DIR/backend/alembic"
+    cp -r "$SRC_DIR/backend/app" "$SRC_DIR/backend/alembic" "$APP_DIR/backend/"
+    cp "$SRC_DIR/backend/alembic.ini" "$SRC_DIR/backend/pyproject.toml" "$APP_DIR/backend/"
+    find "$APP_DIR/backend" -type d -name __pycache__ -prune -exec rm -rf {} +
+    # Betriebsskripte (backup/restore/fix-permissions) mit ausliefern.
+    mkdir -p "$APP_DIR/scripts"
+    cp "$SRC_DIR"/scripts/{backup,restore,fix-permissions}.sh "$APP_DIR/scripts/" 2>/dev/null || true
+    chmod 755 "$APP_DIR"/scripts/*.sh 2>/dev/null || true
+    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+    ok "Backend-Code eingespielt."
+}
+
+# Hält die installierte Version fest (nach erfolgreichem Lauf).
+record_version() {
+    mkdir -p "$STATE_DIR"
+    echo "$NEW_VERSION" > "$STATE_DIR/version"
+    chown -R "$APP_USER:$APP_GROUP" "$STATE_DIR"
+}
+
+# Python-Abhängigkeiten: vollständige Installation nur bei neuem venv oder
+# geändertem pyproject.toml. Sonst wird nur das netprobe-Paket selbst offline
+# (--no-deps, --no-build-isolation) neu eingespielt – kein Download nötig.
+install_python_deps() {
+    local new_hash old_hash=""
+    new_hash="$(sha256sum "$APP_DIR/backend/pyproject.toml" | cut -d' ' -f1)"
+    [ -f "$STATE_DIR/deps.sha256" ] && old_hash="$(cat "$STATE_DIR/deps.sha256")"
+
+    # Z. B. nach einem Ubuntu-Release-Upgrade (neue Python-Version) zeigt das venv ins Leere.
+    if [ -d "$VENV_DIR" ] && ! venv_healthy; then
+        warn "Virtuelle Python-Umgebung ist beschädigt – wird neu erstellt."
+        rm -rf "$VENV_DIR"
+    fi
+    if [ ! -x "$VENV_DIR/bin/python" ]; then
+        log "Erstelle virtuelle Python-Umgebung…"
+        python3 -m venv "$VENV_DIR"
+        old_hash=""
+    fi
+
+    if [ "$new_hash" = "$old_hash" ] && "$VENV_DIR/bin/python" -c 'import setuptools' 2>/dev/null; then
+        "$VENV_DIR/bin/pip" install --quiet --no-deps --no-build-isolation --force-reinstall \
+            "$APP_DIR/backend"
+        ok "Python-Abhängigkeiten unverändert – nur netprobe-Paket aktualisiert."
+        return
+    fi
+
+    log "Installiere Python-Abhängigkeiten…"
+    "$VENV_DIR/bin/pip" install --quiet --upgrade pip setuptools wheel
+    # WeasyPrint (Extra "pdf") für Report-PDFs ist optional; schlägt es fehl,
+    # wird ohne Extra installiert (Reports dann nur als HTML).
+    if "$VENV_DIR/bin/pip" install --quiet "$APP_DIR/backend[pdf]" 2>/dev/null; then
+        ok "Python-Abhängigkeiten installiert (inkl. WeasyPrint für Report-PDF)."
+    else
+        "$VENV_DIR/bin/pip" install --quiet "$APP_DIR/backend"
+        warn "WeasyPrint nicht installiert; Reports werden nur als HTML erzeugt."
+    fi
+    echo "$new_hash" > "$STATE_DIR/deps.sha256"
+}
+
+# Frontend: aus dem Release-Paket vorgebaut übernehmen, sonst im Temp-Verzeichnis
+# bauen (ohne lokales node_modules/dist mitzukopieren). Der Austausch erfolgt über
+# ein Nachbarverzeichnis, damit nie ein halb kopiertes dist ausgeliefert wird.
+deploy_frontend() {
+    local src_dist build_dir="" src_hash=""
+    mkdir -p "$APP_DIR/frontend" "$STATE_DIR"
+    if [ "$FRONTEND_PREBUILT" -eq 1 ]; then
+        src_dist="$SRC_DIR/frontend/dist"
+        ok "Verwende vorgebautes Frontend aus dem Release-Paket."
+    else
+        # npm ci + node_modules + Build brauchen grob 1 GB im Temp-Verzeichnis.
+        require_space "${TMPDIR:-/tmp}" 1024 "den Frontend-Build"
+        require_space "$APP_DIR" 100 "das Frontend"
+        src_hash="$(_frontend_src_md5)"
+        log "Baue Frontend (Vite)…"
+        build_dir="$(mktemp -d)"
+        ( cd "$SRC_DIR/frontend" && tar --exclude=./node_modules --exclude=./dist -cf - . ) \
+            | tar -xf - -C "$build_dir"
+        ( cd "$build_dir" && { npm ci --silent 2>/dev/null || npm install --silent; } )
+        ( cd "$build_dir" && npm run build --silent )
+        src_dist="$build_dir/dist"
+        ok "Frontend gebaut."
+    fi
+    rm -rf "$APP_DIR/frontend/dist.new"
+    cp -r "$src_dist" "$APP_DIR/frontend/dist.new"
     rm -rf "$APP_DIR/frontend/dist"
-    mkdir -p "$APP_DIR/frontend"
-    cp -r "$build_dir/dist" "$APP_DIR/frontend/dist"
-    rm -rf "$build_dir"
-    ok "Frontend gebaut."
+    mv "$APP_DIR/frontend/dist.new" "$APP_DIR/frontend/dist"
+    [ -n "$build_dir" ] && rm -rf "$build_dir"
+    if [ -n "$src_hash" ]; then
+        echo "$src_hash" > "$STATE_DIR/frontend-src.md5"
+    fi
+    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/frontend" "$STATE_DIR"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -365,9 +657,16 @@ setup_env() {
 
 run_migrations() {
     log "Führe Datenbankmigrationen aus…"
+    # Explizites "|| return 1": Im ||-Kontext des Aufrufers greift set -e nicht.
     ( cd "$APP_DIR/backend" && \
-      sudo -u "$APP_USER" env NETPROBE_ENV_FILE="$ENV_FILE" "$VENV_DIR/bin/alembic" upgrade head )
-    ok "Datenbank ist auf dem aktuellen Stand."
+      sudo -u "$APP_USER" env NETPROBE_ENV_FILE="$ENV_FILE" "$VENV_DIR/bin/alembic" upgrade head ) \
+      || return 1
+    # Erfolg erst bestätigen, wenn der DB-Stand tatsächlich den heads entspricht.
+    if migrations_pending "$APP_DIR/backend"; then
+        warn "Nach der Migration: DB-Stand '${MIGRATION_FROM:-leer}' != Ziel '${MIGRATION_TO:-?}'."
+        return 1
+    fi
+    ok "Datenbank ist auf dem aktuellen Stand (${MIGRATION_TO})."
 }
 
 setup_admin() {
@@ -390,27 +689,53 @@ PY
         return
     fi
 
-    echo
-    log "Initialen Admin-Benutzer anlegen."
-    local admin_user admin_pass admin_pass2
-    read -r -p "Admin-Benutzername [admin]: " admin_user
-    admin_user="${admin_user:-admin}"
-    while true; do
-        read -r -s -p "Admin-Passwort (min. 8 Zeichen): " admin_pass; echo
-        read -r -s -p "Passwort bestätigen: " admin_pass2; echo
-        if [ "$admin_pass" != "$admin_pass2" ]; then warn "Passwörter stimmen nicht überein."; continue; fi
-        if [ "${#admin_pass}" -lt 8 ]; then warn "Passwort zu kurz."; continue; fi
-        break
-    done
+    local admin_user admin_pass="" admin_pass2
+    if [ "$INTERACTIVE" -eq 1 ]; then
+        echo
+        log "Initialen Admin-Benutzer anlegen."
+        read -r -p "Admin-Benutzername [admin]: " admin_user
+        admin_user="${admin_user:-admin}"
+        while true; do
+            read -r -s -p "Admin-Passwort (min. 8 Zeichen): " admin_pass; echo
+            read -r -s -p "Passwort bestätigen: " admin_pass2; echo
+            if [ "$admin_pass" != "$admin_pass2" ]; then warn "Passwörter stimmen nicht überein."; continue; fi
+            if [ "${#admin_pass}" -lt 8 ]; then warn "Passwort zu kurz."; continue; fi
+            break
+        done
+    else
+        admin_user="${NETPROBE_ADMIN_USER:-admin}"
+        admin_pass="${NETPROBE_ADMIN_PASSWORD:-}"
+        if [ -n "$admin_pass" ] && [ "${#admin_pass}" -lt 8 ]; then
+            die "NETPROBE_ADMIN_PASSWORD ist zu kurz (min. 8 Zeichen)."
+        fi
+        if [ -z "$admin_pass" ]; then
+            # Zufallspasswort; wird nur einmal in der Zusammenfassung angezeigt.
+            admin_pass="$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
+            GENERATED_ADMIN_USER="$admin_user"
+            GENERATED_ADMIN_PASS="$admin_pass"
+        fi
+    fi
 
-    # Passwort über Umgebungsvariable an CLI übergeben (nicht als Argument -> nicht in ps sichtbar);
-    # das Passwort wird nirgends im Klartext geloggt.
-    ( cd "$APP_DIR/backend" && \
-      sudo -u "$APP_USER" env NETPROBE_ENV_FILE="$ENV_FILE" \
+    # Passwort nur über die Umgebung weiterreichen (sudo --preserve-env), nie als
+    # Argument -> nicht in ps//proc/<pid>/cmdline sichtbar; wird nirgends geloggt.
+    local out
+    out="$( cd "$APP_DIR/backend" && \
         NETPROBE_ADMIN_USER="$admin_user" NETPROBE_ADMIN_PASSWORD="$admin_pass" \
-        "$VENV_DIR/bin/python" -m app.cli ensure-admin >/dev/null )
+        sudo -u "$APP_USER" --preserve-env=NETPROBE_ADMIN_USER,NETPROBE_ADMIN_PASSWORD \
+            env NETPROBE_ENV_FILE="$ENV_FILE" "$VENV_DIR/bin/python" -m app.cli ensure-admin )" || true
     unset admin_pass admin_pass2
-    ok "Admin-Benutzer '${admin_user}' angelegt."
+    if echo "$out" | grep -q "angelegt"; then
+        ok "Admin-Benutzer '${admin_user}' angelegt."
+        # Sofort zeigen (nicht nur in der Zusammenfassung), falls ein späterer Schritt abbricht.
+        if [ -n "$GENERATED_ADMIN_PASS" ]; then
+            echo -e "         ${C_BOLD}Initiales Passwort: ${GENERATED_ADMIN_PASS}${C_RST}  (nur jetzt sichtbar – bitte notieren)"
+        fi
+    else
+        # Nicht angelegt (z. B. existiert doch schon ein Benutzer) -> Zufallspasswort verwerfen.
+        GENERATED_ADMIN_USER=""; GENERATED_ADMIN_PASS=""
+        warn "Admin-Benutzer nicht angelegt: ${out:-keine Ausgabe}"
+        warn "Manuell: cd ${APP_DIR}/backend && sudo -u ${APP_USER} env NETPROBE_ENV_FILE=${ENV_FILE} ${VENV_DIR}/bin/python -m app.cli create-admin --username admin"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -467,13 +792,38 @@ setup_geoip() {
     fi
 }
 
+# Installiert eine Konfigurationsdatei wie dpkg ein "conffile": Hat der Admin die
+# zuletzt ausgelieferte Version lokal angepasst (z. B. TLS in der nginx-Site),
+# wird sie NICHT überschrieben – die neue Version landet daneben als <datei>.netprobe-new.
+install_conffile() {
+    local src="$1" dst="$2" key cur new last=""
+    key="$(basename "$dst")"
+    new="$(sha256sum "$src" | cut -d' ' -f1)"
+    mkdir -p "$STATE_DIR/conffiles"
+    [ -f "$STATE_DIR/conffiles/$key" ] && last="$(cat "$STATE_DIR/conffiles/$key")"
+    if [ -f "$dst" ]; then
+        cur="$(sha256sum "$dst" | cut -d' ' -f1)"
+        if [ "$cur" != "$new" ] && [ "$cur" != "$last" ] && [ "$MODE" = "update" ]; then
+            cp "$src" "${dst}.netprobe-new"
+            warn "${dst} wurde lokal angepasst und bleibt unverändert."
+            warn "Neue Vorlage: ${dst}.netprobe-new (bitte Unterschiede manuell übernehmen)."
+            return 0
+        fi
+    fi
+    cp "$src" "$dst"
+    rm -f "${dst}.netprobe-new"
+    echo "$new" > "$STATE_DIR/conffiles/$key"
+}
+
 setup_nginx() {
     log "Konfiguriere nginx…"
-    cp "$SRC_DIR/deploy/nginx/netprobe.conf" /etc/nginx/sites-available/netprobe.conf
+    install_conffile "$SRC_DIR/deploy/nginx/netprobe.conf" /etc/nginx/sites-available/netprobe.conf
     ln -sf /etc/nginx/sites-available/netprobe.conf /etc/nginx/sites-enabled/netprobe.conf
     rm -f /etc/nginx/sites-enabled/default
     if nginx -t >/dev/null 2>&1; then
-        systemctl reload nginx
+        # reload-or-restart startet ein gestopptes nginx auch (Selbstheilung).
+        systemctl enable nginx >/dev/null 2>&1 || true
+        systemctl reload-or-restart nginx
         ok "nginx konfiguriert."
     else
         warn "nginx-Konfigurationstest fehlgeschlagen; bitte 'nginx -t' prüfen."
@@ -481,12 +831,23 @@ setup_nginx() {
 }
 
 setup_logrotate() {
-    cp "$SRC_DIR/deploy/logrotate/netprobe" /etc/logrotate.d/netprobe
+    install_conffile "$SRC_DIR/deploy/logrotate/netprobe" /etc/logrotate.d/netprobe
     ok "logrotate konfiguriert."
 }
 
 setup_ufw() {
     command -v ufw >/dev/null 2>&1 || return 0
+    if [ "$INTERACTIVE" -eq 0 ]; then
+        # Ohne Rückfrage nur handeln, wenn UFW aktiv ist – sonst wäre die UI unerreichbar.
+        if ufw status 2>/dev/null | grep -q "Status: active"; then
+            ufw allow 80/tcp >/dev/null 2>&1 || true
+            ufw allow 443/tcp >/dev/null 2>&1 || true
+            ok "UFW ist aktiv – Regeln für Port 80/443 hinzugefügt."
+        else
+            ok "UFW ist nicht aktiv – Firewall bleibt unverändert."
+        fi
+        return 0
+    fi
     read -r -p "UFW-Firewallregel für HTTP (Port 80) hinzufügen? [j/N]: " ans
     if [[ "${ans,,}" == "j" ]]; then
         ufw allow 80/tcp >/dev/null 2>&1 || true
@@ -589,68 +950,607 @@ EOF
 # ---------------------------------------------------------------------------
 # 8. Smoke-Tests
 # ---------------------------------------------------------------------------
+# Wartet bis zu 30 s auf den Backend-Healthcheck. Rückgabe 0 nur, wenn das Backend
+# antwortet (nginx-Fehler sind nur eine Warnung).
 smoke_tests() {
     echo
     log "Führe Smoke-Tests durch…"
-    sleep 3
+    local _ healthy=0
+    for _ in $(seq 1 15); do
+        if curl -fsS --max-time 3 http://127.0.0.1:8000/api/health 2>/dev/null | grep -q '"ok"'; then
+            healthy=1
+            break
+        fi
+        sleep 2
+    done
 
     if systemctl is-active --quiet netprobe; then
         ok "systemd-Dienst läuft."
     else
         warn "Dienst läuft nicht. Details: journalctl -u netprobe -n 50"
     fi
-
-    if curl -fsS --max-time 10 http://127.0.0.1:8000/api/health | grep -q '"ok"'; then
+    if [ "$healthy" -eq 1 ]; then
         ok "Backend-Healthcheck (127.0.0.1:8000) erfolgreich."
     else
         warn "Backend-Healthcheck fehlgeschlagen."
     fi
-
-    if curl -fsS --max-time 10 http://127.0.0.1/api/health | grep -q '"ok"'; then
+    if curl -fsS --max-time 10 http://127.0.0.1/api/health 2>/dev/null | grep -q '"ok"'; then
         ok "nginx-Proxy-Healthcheck (Port 80) erfolgreich."
     else
         warn "nginx-Proxy-Healthcheck fehlgeschlagen."
     fi
+    [ "$healthy" -eq 1 ]
+}
+
+_yn() { if [ "$1" -eq 1 ]; then echo "$2"; else echo "$3"; fi; }
+
+# Ergebnis der Änderungserkennung als Tabelle.
+print_plan() {
+    local mig
+    if [ "$MIGRATIONS_PENDING" -eq 1 ]; then
+        mig="ausstehend (${MIGRATION_FROM:-leer} -> ${MIGRATION_TO:-head})"
+    else
+        mig="aktuell (${MIGRATION_TO:-?})"
+    fi
+    echo
+    echo -e "${C_BOLD}  Änderungsanalyse${C_RST}"
+    echo "    Installiert:          $(installed_version)"
+    echo "    Neu:                  ${NEW_VERSION}"
+    echo "    Backend-Code:         $(_yn "$CHANGED_BACKEND" "geändert -> wird eingespielt" "unverändert")"
+    echo "    Python-Abhängigkeiten: $(_yn "$CHANGED_DEPS" "geändert -> pip install" "unverändert")"
+    echo "    Frontend:             $(_yn "$CHANGED_FRONTEND" \
+        "$( [ "$FRONTEND_PREBUILT" -eq 1 ] && echo "geändert -> vorgebautes dist" || echo "geändert -> wird gebaut")" \
+        "unverändert")"
+    echo "    systemd-Unit:         $(_yn "$CHANGED_UNIT" "geändert" "unverändert")"
+    echo "    Datenbank-Migrationen: ${mig}"
+    [ "$VENV_BROKEN" -eq 1 ] && echo "    Python-venv:          beschädigt -> wird neu erstellt"
+    [ "$OPT_FORCE" -eq 1 ] && echo "    (--force: alle Komponenten werden neu eingespielt)"
+    echo
 }
 
 print_summary() {
-    local ip
+    local kind="$1" ip headline color="$C_OK"
     ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    case "$kind" in
+        install)  headline="netprobe ${NEW_VERSION} wurde installiert." ;;
+        update)   headline="netprobe wurde auf ${NEW_VERSION} aktualisiert." ;;
+        current)  headline="netprobe ist bereits aktuell – nichts zu tun." ;;
+        rollback) headline="netprobe wurde auf den Snapshot zurückgerollt."; color="$C_WARN" ;;
+    esac
     echo
-    echo -e "${C_OK}==============================================================${C_RST}"
-    echo -e "${C_OK} netprobe wurde installiert.${C_RST}"
-    echo -e "${C_OK}==============================================================${C_RST}"
+    echo -e "${color}==============================================================${C_RST}"
+    echo -e "${color} ${headline}${C_RST}"
+    echo -e "${color}==============================================================${C_RST}"
+    if [ "$kind" = "update" ]; then
+        echo "  Eingespielt:"
+        [ "$CHANGED_BACKEND" -eq 1 ]    && echo "    - Backend-Code"
+        [ "$CHANGED_DEPS" -eq 1 ]       && echo "    - Python-Abhängigkeiten"
+        [ "$CHANGED_FRONTEND" -eq 1 ]   && echo "    - Frontend"
+        [ "$CHANGED_UNIT" -eq 1 ]       && echo "    - systemd-Unit"
+        [ "$MIGRATIONS_PENDING" -eq 1 ] && echo "    - Datenbank-Migrationen (jetzt: ${MIGRATION_TO:-head})"
+        [ "$VENV_BROKEN" -eq 1 ]        && echo "    - Python-venv neu erstellt"
+    fi
+    if [ -n "$SNAPSHOT_DIR" ]; then
+        echo "  Snapshot:       ${SNAPSHOT_DIR}"
+        echo "  Rollback:       sudo bash ${APP_DIR}/install.sh --rollback"
+    fi
+    if [ -n "$GENERATED_ADMIN_PASS" ]; then
+        echo
+        echo -e "${C_BOLD}  Initialer Admin (Passwort wird NUR JETZT angezeigt – bitte sofort ändern):${C_RST}"
+        echo "    Benutzer:     ${GENERATED_ADMIN_USER}"
+        echo "    Passwort:     ${GENERATED_ADMIN_PASS}"
+        echo "    Neu setzen:   cd ${APP_DIR}/backend && sudo -u ${APP_USER} env NETPROBE_ENV_FILE=${ENV_FILE} \\"
+        echo "                    ${VENV_DIR}/bin/python -m app.cli create-admin --username ${GENERATED_ADMIN_USER} --force"
+        echo
+    fi
     echo "  Weboberfläche:  http://${ip:-<server-ip>}/"
     echo "  API-Dokumentation: http://${ip:-<server-ip>}/api/docs"
     echo "  Konfiguration:  ${ENV_FILE}"
     echo "  Dienststatus:   systemctl status netprobe"
     echo "  Logs:           journalctl -u netprobe -f"
+    echo "  Update:         sudo bash ${APP_DIR}/install.sh   (lädt den neuesten Stand)"
     echo
-    echo "  TLS aktivieren: siehe deploy/nginx/netprobe.conf und docs/security.md"
-    echo
+    [ "$kind" = "install" ] && echo "  TLS aktivieren: siehe deploy/nginx/netprobe.conf und docs/security.md" && echo
+    return 0
 }
 
 # ---------------------------------------------------------------------------
-# Ablauf
+# 9. Quelle, Modus-Erkennung
 # ---------------------------------------------------------------------------
-main() {
-    check_prereqs
-    install_packages
+# Lädt die Quelle von GitHub, wenn das Skript nicht aus einem netprobe-Verzeichnis
+# läuft ("curl | bash" oder Aufruf von /opt/netprobe/install.sh).
+bootstrap_source() {
+    if [ -n "$SRC_DIR" ] && [ "$SRC_DIR" != "$APP_DIR" ] && [ -d "$SRC_DIR/backend/app" ]; then
+        return 0
+    fi
+    command -v curl >/dev/null 2>&1 || die "curl wird benötigt (apt-get install curl)."
+    BOOTSTRAP_DIR="$(mktemp -d /tmp/netprobe-install.XXXXXX)"
+
+    local urls=() url found=""
+    if [ -n "$NETPROBE_SOURCE_URL" ]; then
+        urls=("$NETPROBE_SOURCE_URL")
+    elif [ -n "$NETPROBE_REF" ]; then
+        urls=("https://codeload.github.com/${NETPROBE_REPO}/tar.gz/${NETPROBE_REF}")
+    else
+        # Bevorzugt das neueste Release-Paket (Frontend vorgebaut), sonst Branch "main".
+        urls=("https://github.com/${NETPROBE_REPO}/releases/latest/download/netprobe.tar.gz"
+              "https://codeload.github.com/${NETPROBE_REPO}/tar.gz/main")
+    fi
+    for url in "${urls[@]}"; do
+        log "Lade netprobe: ${url}"
+        if curl -fsSL --retry 3 --connect-timeout 15 -o "$BOOTSTRAP_DIR/src.tar.gz" "$url"; then
+            found="$url"
+            break
+        fi
+        warn "Nicht verfügbar: ${url}"
+    done
+    [ -n "$found" ] || die "netprobe konnte nicht geladen werden (NETPROBE_REPO=${NETPROBE_REPO}).
+       Repository per NETPROBE_REPO=<owner>/<repo> oder Archiv per NETPROBE_SOURCE_URL=<url> angeben."
+
+    mkdir -p "$BOOTSTRAP_DIR/src"
+    tar -xzf "$BOOTSTRAP_DIR/src.tar.gz" -C "$BOOTSTRAP_DIR/src" || die "Archiv ${found} ist beschädigt."
+    local inst
+    inst="$(find "$BOOTSTRAP_DIR/src" -maxdepth 2 -type f -name install.sh | head -n1)"
+    [ -n "$inst" ] || die "Archiv ${found} enthält kein netprobe (install.sh fehlt)."
+    SRC_DIR="$(dirname "$inst")"
+    ok "Quelle geladen."
+}
+
+# Release-Paket (Datei RELEASE + vorgebautes dist) oder Repository-Checkout?
+detect_source() {
+    [ -d "$SRC_DIR/backend/app" ] || die "Kein netprobe-Quellverzeichnis: ${SRC_DIR}/backend/app fehlt."
+    if [ -f "$SRC_DIR/RELEASE" ] && [ -f "$SRC_DIR/frontend/dist/index.html" ]; then
+        FRONTEND_PREBUILT=1
+        NEW_VERSION="$(head -n1 "$SRC_DIR/RELEASE")"
+    elif [ -f "$SRC_DIR/frontend/package.json" ]; then
+        FRONTEND_PREBUILT=0
+        local ver rev
+        ver="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$SRC_DIR/backend/pyproject.toml" | head -n1)"
+        rev="$(git -C "$SRC_DIR" rev-parse --short HEAD 2>/dev/null || echo "${NETPROBE_REF:-src}")"
+        NEW_VERSION="${ver:-?} (${rev}, $(date -u +%Y-%m-%d))"
+        log "Quellcode-Stand erkannt: Frontend wird bei Änderungen auf dem Server gebaut (Node.js)."
+    else
+        die "Weder vorgebautes Frontend (Release-Paket) noch Frontend-Quellcode gefunden."
+    fi
+}
+
+# Installiert = /opt/netprobe mit venv (auch ein beschädigtes venv zählt – es wird repariert).
+is_installed() { [ -d "$VENV_DIR" ]; }
+
+installed_version() {
+    if [ -f "$STATE_DIR/version" ]; then cat "$STATE_DIR/version"; else echo "unbekannt (ältere Installation)"; fi
+}
+
+choose_mode() {
+    if [ "$MODE" = "update" ] && ! is_installed; then
+        die "Keine bestehende Installation gefunden (${VENV_DIR}) – Update nicht möglich."
+    fi
+    if [ -n "$MODE" ]; then return; fi
+    if is_installed; then
+        MODE="update"
+        log "Bestehende Installation gefunden ($(installed_version)) -> Smart-Update."
+    else
+        MODE="install"
+        log "Keine Installation unter ${APP_DIR} gefunden -> Neuinstallation von netprobe ${NEW_VERSION}."
+    fi
+}
+
+# Pfad der SQLite-Datenbank aus der Konfiguration (Default /var/lib/netprobe/db.sqlite).
+_db_path() {
+    local url
+    url="$( ( set -a; . "$ENV_FILE" 2>/dev/null; echo "${NETPROBE_DATABASE_URL:-}" ) )"
+    url="${url:-sqlite:///${DATA_DIR}/db.sqlite}"
+    echo "${url#sqlite:///}"
+}
+
+# ---------------------------------------------------------------------------
+# 10. Snapshots (Backup) und Rollback
+# ---------------------------------------------------------------------------
+# Snapshot = <SNAPSHOT_ROOT>/snapshot_<zeit>/ mit
+#   db.sqlite.gz    konsistente DB-Kopie (sqlite3 .backup, WAL-sicher; restore.sh-kompatibel)
+#   app.tar.gz      /opt/netprobe ohne venv (Code, dist, Skripte, Installer-Zustand)
+#   config.tar.gz   /etc/netprobe, systemd-Units, nginx-Site, logrotate
+#   MANIFEST        Version, Zeitpunkt, Anlass
+# Argument "noprune" überspringt das Aufräumen alter Snapshots.
+backup_current_installation() {
+    local ts db db_mb=0 app_mb=0 f cfg=()
+    ts="$(date +%Y%m%d_%H%M%S)"
+    db="$(_db_path)"
+    [ -f "$db" ] && db_mb=$(( $(stat -c %s "$db") / 1048576 ))
+    [ -d "$APP_DIR" ] && app_mb="$(du -sm --exclude="$VENV_DIR" "$APP_DIR" 2>/dev/null | cut -f1)"
+    require_space "$SNAPSHOT_ROOT" $(( db_mb + ${app_mb:-0} + 100 )) "den Snapshot"
+
+    mkdir -p "$SNAPSHOT_ROOT"
+    SNAPSHOT_DIR="${SNAPSHOT_ROOT}/snapshot_${ts}"
+    ( umask 077; mkdir -p "$SNAPSHOT_DIR" )
+    log "Erstelle Snapshot ${SNAPSHOT_DIR}…"
+
+    if [ -f "$db" ]; then
+        command -v sqlite3 >/dev/null 2>&1 || apt-get install -y -qq sqlite3
+        ( umask 077; sqlite3 "$db" ".backup '${SNAPSHOT_DIR}/db.sqlite'" ) \
+            || die "Datenbank-Backup fehlgeschlagen – Abbruch, es wurde nichts verändert."
+        gzip -f "${SNAPSHOT_DIR}/db.sqlite"
+    else
+        warn "Keine Datenbank unter ${db} – Snapshot ohne DB."
+    fi
+    if [ -d "$APP_DIR" ]; then
+        tar -czf "${SNAPSHOT_DIR}/app.tar.gz" -C / --exclude="${VENV_DIR#/}" "${APP_DIR#/}"
+    fi
+    for f in "$ETC_DIR" /etc/systemd/system/netprobe.service /etc/systemd/system/netprobe-iperf3.service \
+             /etc/nginx/sites-available/netprobe.conf /etc/logrotate.d/netprobe; do
+        [ -e "$f" ] && cfg+=("${f#/}")
+    done
+    if [ "${#cfg[@]}" -gt 0 ]; then
+        tar -czf "${SNAPSHOT_DIR}/config.tar.gz" -C / "${cfg[@]}"
+    fi
+    {
+        echo "version=$(installed_version)"
+        echo "created=$(date -Is)"
+        echo "reason=${MODE:-backup}"
+        echo "db=${db}"
+    } > "${SNAPSHOT_DIR}/MANIFEST"
+    chmod 600 "$SNAPSHOT_DIR"/*
+    ok "Snapshot erstellt ($(du -sh "$SNAPSHOT_DIR" | cut -f1))."
+    [ "${1:-}" = "noprune" ] || prune_snapshots
+}
+
+_snapshots() { find "$SNAPSHOT_ROOT" -maxdepth 1 -type d -name 'snapshot_*' 2>/dev/null | LC_ALL=C sort -r; }
+
+prune_snapshots() {
+    local keep="$KEEP_SNAPSHOTS" old
+    [[ "$keep" =~ ^[1-9][0-9]*$ ]] || keep=5
+    old="$(_snapshots | tail -n +$((keep + 1)))"
+    [ -n "$old" ] || return 0
+    echo "$old" | xargs -r -d '\n' rm -rf
+    ok "Ältere Snapshots entfernt (behalten werden die neuesten ${keep})."
+}
+
+list_snapshots() {
+    local d n=0
+    echo "Snapshots unter ${SNAPSHOT_ROOT} (neueste zuerst):"
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        n=$((n + 1))
+        printf "  %-28s %6s  %-8s %s\n" "$(basename "$d")" "$(du -sh "$d" | cut -f1)" \
+            "$(sed -n 's/^reason=//p' "$d/MANIFEST" 2>/dev/null)" \
+            "$(sed -n 's/^version=//p' "$d/MANIFEST" 2>/dev/null)"
+    done <<< "$(_snapshots)"
+    [ "$n" -gt 0 ] || echo "  (keine)"
+}
+
+# Spielt einen Snapshot zurück: Code, Konfiguration und Datenbank; startet den Dienst.
+restore_snapshot() {
+    local dir="$1" db tmp
+    [ -f "$dir/MANIFEST" ] || die "Kein gültiger Snapshot: ${dir}"
+    log "Rolle zurück auf Snapshot ${dir} ($(sed -n 's/^version=//p' "$dir/MANIFEST"))…"
+    systemctl stop netprobe 2>/dev/null || true
+
+    if [ -f "$dir/app.tar.gz" ]; then
+        rm -rf "$APP_DIR/backend" "$APP_DIR/frontend" "$APP_DIR/scripts" "$STATE_DIR"
+        tar -xzf "$dir/app.tar.gz" -C /
+        ok "Anwendung wiederhergestellt."
+    fi
+    if [ -f "$dir/config.tar.gz" ]; then
+        tar -xzf "$dir/config.tar.gz" -C /
+        systemctl daemon-reload
+        ok "Konfiguration wiederhergestellt."
+    fi
+    if [ -f "$dir/db.sqlite.gz" ]; then
+        db="$(_db_path)"
+        tmp="$(mktemp "$(dirname "$db")/.netprobe-restore.XXXXXX")"
+        gunzip -c "$dir/db.sqlite.gz" > "$tmp"
+        if ! sqlite3 "$tmp" "PRAGMA integrity_check;" | grep -qx "ok"; then
+            rm -f "$tmp"
+            die "Integritätsprüfung der Snapshot-DB fehlgeschlagen – Datenbank NICHT ersetzt."
+        fi
+        # Alte WAL-/SHM-Dateien dürfen nicht auf die zurückgespielte DB angewendet werden.
+        rm -f "${db}-wal" "${db}-shm"
+        mv "$tmp" "$db"
+        chown "$APP_USER:$APP_GROUP" "$db"
+        ok "Datenbank wiederhergestellt."
+    fi
+    # Das netprobe-Paket im venv auf den zurückgespielten Stand bringen (offline).
+    if venv_healthy && "$VENV_DIR/bin/python" -c 'import setuptools' 2>/dev/null; then
+        "$VENV_DIR/bin/pip" install --quiet --no-deps --no-build-isolation --force-reinstall \
+            "$APP_DIR/backend" || warn "pip-Reinstallation des Pakets fehlgeschlagen."
+    fi
+    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+    if nginx -t >/dev/null 2>&1; then systemctl reload-or-restart nginx || true; fi
+    systemctl start netprobe || warn "Dienst konnte nicht gestartet werden (journalctl -u netprobe -n 50)."
+}
+
+# Neuinstallation über eine bestehende Installation (--install): Snapshot, venv neu.
+# Daten und Konfiguration bleiben erhalten; Löschen nur interaktiv nach Bestätigung.
+prepare_reinstall() {
+    is_installed || return 0
+    backup_current_installation
+    systemctl stop netprobe 2>/dev/null || true
+    rm -rf "$VENV_DIR" "$STATE_DIR/deps.sha256" "$STATE_DIR/frontend-src.md5"
+
+    if [ "$INTERACTIVE" -eq 0 ]; then
+        ok "Daten und Konfiguration bleiben erhalten."
+        return 0
+    fi
+    echo
+    local keep confirm
+    read -r -p "Datenbank, Messdaten und Konfiguration BEHALTEN? [J/n]: " keep
+    if [[ "${keep,,}" != "n" ]]; then
+        ok "Daten und Konfiguration bleiben erhalten."
+        return 0
+    fi
+    warn "Es werden gelöscht: Datenbank, Captures, Reports, ${ENV_FILE} (inkl. SECRET_KEY)."
+    warn "Der Snapshot ${SNAPSHOT_DIR} bleibt erhalten."
+    read -r -p "Zur Bestätigung LOESCHEN eingeben: " confirm
+    if [ "$confirm" != "LOESCHEN" ]; then
+        ok "Nicht bestätigt – Daten und Konfiguration bleiben erhalten."
+        return 0
+    fi
+    local db; db="$(_db_path)"
+    rm -f "$db" "${db}-wal" "${db}-shm"
+    rm -rf "$CAPTURE_DIR" "$DATA_DIR/reports"
+    rm -f "$ENV_FILE"
+    ok "Daten und Konfiguration gelöscht."
+}
+
+# Legt den Installer unter /opt/netprobe ab (für Updates/Rollback ohne Quellverzeichnis).
+# Über temporäre Datei + mv (neuer Inode), da das Skript gerade selbst laufen kann.
+install_self() {
+    [ -f "$SRC_DIR/install.sh" ] || return 0
+    cp "$SRC_DIR/install.sh" "$APP_DIR/.install.sh.new"
+    chmod 755 "$APP_DIR/.install.sh.new"
+    mv -f "$APP_DIR/.install.sh.new" "$APP_DIR/install.sh"
+}
+
+# ---------------------------------------------------------------------------
+# 11. Ablauf
+# ---------------------------------------------------------------------------
+# 1 während Änderungen an einer bestehenden Installation laufen: bricht das Skript
+# dann ab, rollt on_exit() automatisch auf SNAPSHOT_DIR zurück.
+UPDATE_IN_PROGRESS=0
+
+on_exit() {
+    local rc=$?
+    if [ "$rc" -ne 0 ] && [ "$UPDATE_IN_PROGRESS" -eq 1 ] && [ -n "$SNAPSHOT_DIR" ]; then
+        UPDATE_IN_PROGRESS=0
+        echo
+        warn "Update fehlgeschlagen (Exit-Code ${rc}) – automatischer Rollback auf ${SNAPSHOT_DIR}…"
+        if restore_snapshot "$SNAPSHOT_DIR" && smoke_tests; then
+            warn "Rollback abgeschlossen; der vorherige Stand läuft wieder. Ursache: siehe Ausgabe oben."
+        else
+            warn "Rollback fehlgeschlagen oder Dienst antwortet nicht! journalctl -u netprobe -n 50"
+            warn "Erneut versuchen: sudo bash ${APP_DIR}/install.sh --rollback=${SNAPSHOT_DIR}"
+        fi
+    fi
+    if [ -n "$BOOTSTRAP_DIR" ]; then rm -rf "$BOOTSTRAP_DIR"; fi
+    exit "$rc"
+}
+
+setup_fresh_installation() {
+    STEPS_TOTAL=11
+    [ "$INTERACTIVE" -eq 1 ] && STEPS_TOTAL=12
+    # Bei einer Neuinstallation werden alle Komponenten eingespielt.
+    CHANGED_BACKEND=1; CHANGED_DEPS=1; CHANGED_FRONTEND=1; CHANGED_UNIT=1; MIGRATIONS_PENDING=1
+
+    step "Vorbedingungen prüfen";            check_prereqs
+    prepare_reinstall
+    step "Systempakete installieren";        install_packages
+    step "Benutzer und Verzeichnisse";       setup_user_dirs; seed_speedtest_license
+    step "Konfiguration";                    setup_env
+    step "Backend und Python-Umgebung";      deploy_backend; install_python_deps
+    step "Frontend";                         deploy_frontend
+    step "Datenbank initialisieren (Alembic)"
+    run_migrations || die "Datenbankmigration fehlgeschlagen. Details siehe oben."
+    step "Admin-Benutzer";                   setup_admin
+    step "systemd-Dienste";                  setup_systemd; setup_iperf3_service
+    step "nginx, logrotate, GeoIP, Firewall"; setup_geoip; setup_nginx; setup_logrotate; setup_ufw
+    if [ "$INTERACTIVE" -eq 1 ]; then
+        step "Netzwerk";                     configure_network
+    fi
+    step "Smoke-Tests"
+    smoke_tests || warn "Smoke-Tests nicht vollständig erfolgreich – siehe Hinweise oben."
+    record_version
+    install_self
+    print_summary install
+}
+
+# Analysiert die bestehende Installation und setzt die CHANGED_*-Flags.
+plan_update() {
+    log "Analysiere bestehende Installation…"
+    if ! venv_healthy; then VENV_BROKEN=1; fi
+    if backend_code_changed; then CHANGED_BACKEND=1; fi
+    if python_deps_changed; then CHANGED_DEPS=1; fi
+    if frontend_code_changed; then CHANGED_FRONTEND=1; fi
+    if systemd_unit_changed; then CHANGED_UNIT=1; fi
+    if [ "$VENV_BROKEN" -eq 1 ]; then
+        MIGRATIONS_PENDING=1              # ohne venv nicht prüfbar -> nach Reparatur migrieren
+    elif migrations_pending "$SRC_DIR/backend"; then
+        MIGRATIONS_PENDING=1
+    fi
+    if [ "$OPT_FORCE" -eq 1 ]; then CHANGED_BACKEND=1; CHANGED_FRONTEND=1; CHANGED_UNIT=1; fi
+    if [ "$OPT_REBUILD_FRONTEND" -eq 1 ]; then CHANGED_FRONTEND=1; fi
+    if [ "$OPT_RUN_MIGRATIONS" -eq 1 ]; then MIGRATIONS_PENDING=1; fi
+    print_plan
+}
+
+# Nichts zu aktualisieren: nur fehlende/abweichende Teile reparieren, ohne Neustart.
+self_heal() {
+    log "Prüfe Installation auf fehlende Teile…"
     setup_user_dirs
     seed_speedtest_license
-    deploy_app
     setup_env
-    run_migrations
-    setup_admin
-    setup_systemd
-    setup_iperf3_service
-    setup_geoip
     setup_nginx
     setup_logrotate
-    setup_ufw
-    configure_network
-    smoke_tests
-    print_summary
+    if [ "$(sha256sum < "$SRC_DIR/deploy/systemd/netprobe-iperf3.service")" \
+            != "$(sha256sum < /etc/systemd/system/netprobe-iperf3.service 2>/dev/null)" ]; then
+        setup_iperf3_service
+    fi
+    systemctl enable netprobe >/dev/null 2>&1 || true
+    if ! systemctl is-active --quiet netprobe; then
+        warn "Dienst netprobe lief nicht – wird gestartet."
+        systemctl start netprobe || true
+    fi
+    setup_admin
 }
 
-main "$@"
+perform_smart_update() {
+    check_prereqs
+    plan_update
+
+    install_packages          # nur fehlende Pakete; Node.js nur, wenn gebaut werden muss
+    local pending=$(( CHANGED_BACKEND | CHANGED_DEPS | CHANGED_FRONTEND | CHANGED_UNIT \
+                      | MIGRATIONS_PENDING | VENV_BROKEN ))
+    if [ "$pending" -eq 0 ]; then
+        ok "Code, Frontend, Abhängigkeiten und Datenbankschema sind aktuell."
+        self_heal
+        smoke_tests || warn "Smoke-Tests nicht vollständig erfolgreich – siehe Hinweise oben."
+        record_version
+        install_self
+        print_summary current
+        return 0
+    fi
+
+    backup_current_installation
+    UPDATE_IN_PROGRESS=1      # ab hier: Abbruch -> automatischer Rollback (on_exit)
+
+    log "Stoppe Dienst netprobe…"
+    systemctl stop netprobe 2>/dev/null || true
+    setup_user_dirs
+    seed_speedtest_license
+    setup_env
+
+    [ "$CHANGED_BACKEND" -eq 1 ] && deploy_backend
+    if [ $(( CHANGED_BACKEND | CHANGED_DEPS | VENV_BROKEN )) -eq 1 ]; then
+        install_python_deps
+    fi
+    [ "$CHANGED_FRONTEND" -eq 1 ] && deploy_frontend
+
+    # Nach dem Einspielen erneut gegen die NEUEN heads prüfen.
+    if [ "$MIGRATIONS_PENDING" -eq 1 ] || migrations_pending "$APP_DIR/backend"; then
+        MIGRATIONS_PENDING=1
+        run_migrations || die "Datenbankmigration fehlgeschlagen bzw. nicht verifiziert."
+    fi
+
+    setup_systemd             # aktualisiert die Unit und startet den Dienst
+    setup_iperf3_service
+    setup_nginx
+    setup_logrotate
+    setup_admin
+    smoke_tests || die "Backend antwortet nach dem Update nicht."
+    UPDATE_IN_PROGRESS=0
+
+    record_version
+    install_self
+    print_summary update
+}
+
+perform_rollback() {
+    is_installed || die "Keine Installation unter ${APP_DIR} gefunden."
+    local dir="$OPT_ROLLBACK"
+    if [ "$dir" = "latest" ]; then
+        # Neuester Snapshot, der NICHT selbst von einem Rollback angelegt wurde – sonst
+        # würde ein zweites --rollback nur den ersten rückgängig machen.
+        dir=""
+        local d
+        while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            grep -qx "reason=rollback" "$d/MANIFEST" 2>/dev/null && continue
+            dir="$d"
+            break
+        done <<< "$(_snapshots)"
+        [ -n "$dir" ] || die "Kein Snapshot unter ${SNAPSHOT_ROOT} vorhanden (siehe --list-backups)."
+    elif [ ! -d "$dir" ] && [ -d "${SNAPSHOT_ROOT}/${dir}" ]; then
+        dir="${SNAPSHOT_ROOT}/${dir}"
+    fi
+    [ -f "$dir/MANIFEST" ] || die "Kein gültiger Snapshot: ${dir} (siehe --list-backups)."
+    MODE="rollback"
+    # Aktuellen Stand vorher sichern, damit auch der Rollback umkehrbar ist. Nicht
+    # aufräumen, sonst könnte der Ziel-Snapshot selbst gelöscht werden.
+    local target="$dir"
+    backup_current_installation noprune
+    restore_snapshot "$target"
+    smoke_tests || warn "Smoke-Tests nicht vollständig erfolgreich – siehe Hinweise oben."
+    print_summary rollback
+    echo "  Zurückgerollt auf:   ${target}"
+    echo "  Stand vor Rollback:  ${SNAPSHOT_DIR}"
+    echo
+}
+
+usage() {
+    cat <<'EOF'
+netprobe Installer/Updater – erkennt Neuinstallation vs. Update automatisch.
+
+  curl -sSL https://raw.githubusercontent.com/youruser/netprobe/main/install.sh | sudo bash
+  sudo bash install.sh [optionen]
+  sudo bash /opt/netprobe/install.sh [optionen]     # Update vom neuesten GitHub-Stand
+
+Optionen (bei "curl | bash": ... | sudo bash -s -- <optionen>):
+  --rebuild-frontend   Frontend erzwingen (neu bauen bzw. dist neu einspielen)
+  --run-migrations     alembic upgrade head erzwingen (inkl. Prüfung)
+  --backup-only        nur Snapshot anlegen, sonst nichts ändern
+  --rollback[=DIR]     auf den neuesten (oder angegebenen) Snapshot zurückrollen
+  --list-backups       vorhandene Snapshots anzeigen
+  --force              alle Komponenten neu einspielen (Update)
+  --update             Update erzwingen (Fehler, wenn nichts installiert ist)
+  --install            vollständige Neueinrichtung über eine bestehende Installation
+  --interactive        Admin-Passwort, Firewall und Netzwerk interaktiv abfragen
+  -h, --help           diese Hilfe
+
+Umgebungsvariablen: NETPROBE_REPO, NETPROBE_REF, NETPROBE_SOURCE_URL,
+NETPROBE_ADMIN_USER, NETPROBE_ADMIN_PASSWORD, NETPROBE_KEEP_SNAPSHOTS.
+Details: docs/installation.md und docs/update.md
+EOF
+}
+
+main() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --rebuild-frontend) OPT_REBUILD_FRONTEND=1 ;;
+            --run-migrations)   OPT_RUN_MIGRATIONS=1 ;;
+            --backup-only)      OPT_BACKUP_ONLY=1 ;;
+            --rollback)         OPT_ROLLBACK="latest" ;;
+            --rollback=*)       OPT_ROLLBACK="${1#--rollback=}"; [ -n "$OPT_ROLLBACK" ] || OPT_ROLLBACK="latest" ;;
+            --list-backups)     OPT_LIST_BACKUPS=1 ;;
+            --force)            OPT_FORCE=1 ;;
+            --update)           MODE="update" ;;
+            --install)          MODE="install" ;;
+            --interactive)      INTERACTIVE=1 ;;
+            -h|--help)          usage; exit 0 ;;
+            *) die "Unbekannte Option: $1 (siehe --help)" ;;
+        esac
+        shift
+    done
+
+    [ "$(id -u)" -eq 0 ] || die "Bitte als root ausführen (sudo bash install.sh)."
+
+    # Bei "curl | bash" ist stdin das Skript selbst: Kindprozesse (apt, pip, npm …)
+    # dürfen es nicht lesen. Rückfragen gibt es nur mit --interactive (über das Terminal).
+    if [ "$INTERACTIVE" -eq 1 ]; then
+        if [ ! -t 0 ]; then
+            if ( exec </dev/tty ) 2>/dev/null; then exec </dev/tty; else die "--interactive benötigt ein Terminal."; fi
+        fi
+    else
+        exec </dev/null
+    fi
+    trap on_exit EXIT
+
+    if [ "$OPT_LIST_BACKUPS" -eq 1 ]; then list_snapshots; exit 0; fi
+    if [ -n "$OPT_ROLLBACK" ]; then perform_rollback; exit 0; fi
+    if [ "$OPT_BACKUP_ONLY" -eq 1 ]; then
+        is_installed || die "Keine Installation unter ${APP_DIR} gefunden – nichts zu sichern."
+        MODE="backup"
+        backup_current_installation
+        ok "Snapshot: ${SNAPSHOT_DIR}"
+        exit 0
+    fi
+
+    bootstrap_source
+    detect_source
+    choose_mode
+    log "Modus: $([ "$MODE" = "update" ] && echo "Smart-Update" || echo "Neuinstallation")"
+
+    if [ "$MODE" = "update" ]; then perform_smart_update; else setup_fresh_installation; fi
+}
+
+# Aufruf und exit in EINER Zeile: Bash hat damit das gesamte Skript gelesen, bevor
+# stdin umgelenkt wird (wichtig für "curl | bash").
+main "$@"; exit

@@ -27,3 +27,6 @@ netprobe.env
 .vscode/
 .idea/
 .DS_Store
+
+# Release-Pakete (scripts/build-release.sh)
+release/
