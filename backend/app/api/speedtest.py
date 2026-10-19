@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, get_current_user, require_admin
-from app.core.timeutils import utcnow
+from app.api.timerange import resolve_range, thinned_rows
 from app.db.session import get_db, session_scope
 from app.models.speedtest import SpeedtestResult
 from app.models.user import User
@@ -23,15 +22,19 @@ router = APIRouter(prefix="/api/speedtest", tags=["speedtest"])
 @router.get("/results", response_model=list[SpeedtestOut])
 def list_results(
     range: str = "24h",
-    limit: int = 500,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 3000,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[SpeedtestResult]:
-    since = _range_to_since(range)
-    q = select(SpeedtestResult).order_by(SpeedtestResult.ts.desc())
+    since, until = resolve_range(range, start, end, default="24h")
+    conds = []
     if since is not None:
-        q = q.where(SpeedtestResult.ts >= since)
-    return list(db.execute(q.limit(min(limit, 5000))).scalars().all())
+        conds.append(SpeedtestResult.ts >= since)
+    if until is not None:
+        conds.append(SpeedtestResult.ts <= until)
+    return thinned_rows(db, SpeedtestResult, conds, SpeedtestResult.ts, min(max(limit, 1), 10000))
 
 
 @router.get("/latest", response_model=SpeedtestOut | None)
@@ -80,16 +83,3 @@ async def run_now(
 async def servers(_: User = Depends(require_admin)) -> list[dict]:
     return await asyncio.to_thread(speedtest_service.list_servers)
 
-
-def _range_to_since(range: str):
-    now = utcnow()
-    mapping = {
-        "24h": timedelta(hours=24),
-        "7d": timedelta(days=7),
-        "30d": timedelta(days=30),
-    }
-    if range in mapping:
-        return now - mapping[range]
-    if range == "all":
-        return None
-    return now - timedelta(hours=24)

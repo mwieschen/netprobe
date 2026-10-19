@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -13,8 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, get_current_user, require_admin
+from app.api.timerange import resolve_range, thinned_rows
 from app.core.config import settings
-from app.core.timeutils import utcnow
 from app.db.session import get_db, session_scope
 from app.models.user import User
 from app.models.voip import VoipServer, VoipTest
@@ -273,15 +272,19 @@ def download_capture(
 def server_history(
     server_id: int,
     range: str = "24h",
-    limit: int = 500,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 2000,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[VoipTestOut]:
-    since = _range_to_since(range)
-    q = select(VoipTest).where(VoipTest.server_id == server_id).order_by(VoipTest.ts.desc())
+    since, until = resolve_range(range, start, end, default="24h")
+    conds = [VoipTest.server_id == server_id]
     if since is not None:
-        q = q.where(VoipTest.ts >= since)
-    rows = db.execute(q.limit(min(limit, 5000))).scalars().all()
+        conds.append(VoipTest.ts >= since)
+    if until is not None:
+        conds.append(VoipTest.ts <= until)
+    rows = thinned_rows(db, VoipTest, conds, VoipTest.ts, min(max(limit, 1), 5000))
     return [_test_to_out(t) for t in rows]
 
 
@@ -296,12 +299,3 @@ def all_history(
     ).scalars().all()
     return [_test_to_out(t) for t in rows]
 
-
-def _range_to_since(range: str):
-    now = utcnow()
-    mapping = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
-    if range in mapping:
-        return now - mapping[range]
-    if range == "all":
-        return None
-    return now - timedelta(hours=24)

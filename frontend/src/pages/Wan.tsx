@@ -2,20 +2,17 @@ import { useEffect, useState } from "react";
 import { api, ApiError, WanResult, WanTarget } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import { Badge, ErrorBox, Modal, RangeSelect } from "../components/common";
+import TimeRangePicker, { TimeWindow, windowBounds, windowQuery } from "../components/TimeRange";
+import { Badge, ErrorBox, Modal } from "../components/common";
 
-const RANGES = [
-  { value: "24h", label: "24 Stunden" },
-  { value: "7d", label: "7 Tage" },
-  { value: "30d", label: "30 Tage" },
-];
+const PRESETS = ["24h", "7d", "30d", "90d", "365d", "all"];
 
 export default function WanPage() {
   const { isAdmin } = useAuth();
   const [targets, setTargets] = useState<WanTarget[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [results, setResults] = useState<WanResult[]>([]);
-  const [range, setRange] = useState("24h");
+  const [win, setWin] = useState<TimeWindow>({ range: "24h" });
   const [showModal, setShowModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,8 +26,8 @@ export default function WanPage() {
 
   useEffect(() => {
     if (selected === null) return;
-    api.get<WanResult[]>(`/api/wan/targets/${selected}/results?range=${range}`).then(setResults);
-  }, [selected, range]);
+    api.get<WanResult[]>(`/api/wan/targets/${selected}/results?${windowQuery(win)}`).then(setResults);
+  }, [selected, win]);
 
   async function remove(id: number) {
     if (!confirm("Ziel wirklich löschen?")) return;
@@ -43,13 +40,14 @@ export default function WanPage() {
     try {
       await api.post(`/api/wan/targets/${id}/run`);
       if (selected === id) {
-        api.get<WanResult[]>(`/api/wan/targets/${id}/results?range=${range}`).then(setResults);
+        api.get<WanResult[]>(`/api/wan/targets/${id}/results?${windowQuery(win)}`).then(setResults);
       }
     } catch (err) {
       setError((err as ApiError).detail);
     }
   }
 
+  const bounds = windowBounds(win);
   const ordered = [...results].reverse();
   const pt = (sel: (r: WanResult) => number | null) =>
     ordered.filter((r) => r.ok).map((r) => [new Date(r.ts).getTime(), sel(r)] as [number, number | null]);
@@ -104,11 +102,13 @@ export default function WanPage() {
         <>
           <div className="topbar">
             <h2>Zeitreihen: {targets.find((t) => t.id === selected)?.name}</h2>
-            <RangeSelect value={range} onChange={setRange} options={RANGES} />
+            <TimeRangePicker value={win} onChange={setWin} presets={PRESETS} />
           </div>
           <div className="card" style={{ marginBottom: 16 }}>
             <h2>Latenz (ms) & Jitter</h2>
             <TimeSeriesChart
+              xMin={bounds.min}
+              xMax={bounds.max}
               yName="ms"
               series={[
                 { name: "RTT ø", data: pt((r) => r.rtt_avg), color: "#38bdf8" },
@@ -120,6 +120,8 @@ export default function WanPage() {
           <div className="card">
             <h2>Paketverlust (%)</h2>
             <TimeSeriesChart
+              xMin={bounds.min}
+              xMax={bounds.max}
               yName="%"
               series={[{ name: "Loss", data: lossPt, color: "#ef4444", type: "line" }]}
               height={220}

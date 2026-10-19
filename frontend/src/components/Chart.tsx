@@ -14,11 +14,15 @@ interface Props {
   height?: number;
   yName?: string;
   y2Name?: string;
+  // Sichtbarer Zeitbereich (epoch ms). Ohne Angabe skaliert die Achse auf die Daten.
+  xMin?: number;
+  xMax?: number;
 }
 
 // Wiederverwendbares Zeitreihendiagramm auf Basis von echarts (ohne Wrapper).
 // Zeitachse in lokaler Zeit; die Datenpunkte kommen als [epoch_ms, wert].
-export default function TimeSeriesChart({ series, height = 320, yName, y2Name }: Props) {
+// Mausrad/Schieberegler zoomen innerhalb des geladenen Zeitraums.
+export default function TimeSeriesChart({ series, height = 320, yName, y2Name, xMin, xMax }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
 
@@ -48,11 +52,25 @@ export default function TimeSeriesChart({ series, height = 320, yName, y2Name }:
     chart.setOption(
       {
         animation: false,
-        grid: { left: 55, right: hasY2 ? 55 : 20, top: 30, bottom: 45 },
+        grid: { left: 55, right: hasY2 ? 55 : 20, top: 30, bottom: 70 },
         tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
         legend: { textStyle: { color: textColor }, top: 0 },
+        dataZoom: [
+          { type: "inside", xAxisIndex: 0, filterMode: "none" },
+          {
+            type: "slider",
+            xAxisIndex: 0,
+            filterMode: "none",
+            height: 18,
+            bottom: 8,
+            textStyle: { color: textColor },
+            borderColor: lineColor,
+          },
+        ],
         xAxis: {
           type: "time",
+          min: xMin,
+          max: xMax,
           axisLine: { lineStyle: { color: lineColor } },
           axisLabel: { color: textColor },
         },
@@ -90,7 +108,7 @@ export default function TimeSeriesChart({ series, height = 320, yName, y2Name }:
       },
       { notMerge: true },
     );
-  }, [series, yName, y2Name]);
+  }, [series, yName, y2Name, xMin, xMax]);
 
   return <div ref={ref} style={{ height, width: "100%" }} />;
 }

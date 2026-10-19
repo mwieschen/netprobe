@@ -94,6 +94,16 @@ export interface PingSample {
   ok: boolean;
 }
 
+// Punkt der Dauerping-Zeitreihe (/api/ping/jobs/<id>/series); count > 1 = gebündelt.
+export interface PingSeriesPoint {
+  ts: string;
+  count: number;
+  loss: number;
+  rtt_min: number | null;
+  rtt_avg: number | null;
+  rtt_max: number | null;
+}
+
 export interface Capture {
   id: number;
   ts: string;

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, get_current_user, require_admin
-from app.core.timeutils import utcnow
+from app.api.timerange import resolve_range, thinned_rows
 from app.db.session import get_db, session_scope
 from app.models.health_check import HealthCheckResult, HealthProbe
 from app.models.user import User
@@ -176,27 +175,18 @@ async def run_probe_now(
 def probe_history(
     probe_id: int,
     range: str = "24h",
-    limit: int = 500,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 2000,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[HealthCheckResultOut]:
-    since = _range_to_since(range)
-    q = (
-        select(HealthCheckResult)
-        .where(HealthCheckResult.probe_id == probe_id)
-        .order_by(HealthCheckResult.ts.desc())
-    )
+    since, until = resolve_range(range, start, end, default="24h")
+    conds = [HealthCheckResult.probe_id == probe_id]
     if since is not None:
-        q = q.where(HealthCheckResult.ts >= since)
-    rows = db.execute(q.limit(min(limit, 5000))).scalars().all()
+        conds.append(HealthCheckResult.ts >= since)
+    if until is not None:
+        conds.append(HealthCheckResult.ts <= until)
+    rows = thinned_rows(db, HealthCheckResult, conds, HealthCheckResult.ts, min(max(limit, 1), 5000))
     return [_result_to_out(r) for r in rows]
 
-
-def _range_to_since(range: str):
-    now = utcnow()
-    mapping = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
-    if range in mapping:
-        return now - mapping[range]
-    if range == "all":
-        return None
-    return now - timedelta(hours=24)

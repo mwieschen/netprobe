@@ -2,28 +2,24 @@ import { useEffect, useState } from "react";
 import { api, ApiError, Speedtest } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import { ErrorBox, RangeSelect } from "../components/common";
+import TimeRangePicker, { TimeWindow, windowBounds, windowQuery } from "../components/TimeRange";
+import { ErrorBox } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
-const RANGES = [
-  { value: "24h", label: "24 Stunden" },
-  { value: "7d", label: "7 Tage" },
-  { value: "30d", label: "30 Tage" },
-  { value: "all", label: "Gesamt" },
-];
+const PRESETS = ["24h", "7d", "30d", "90d", "365d", "all"];
 
 export default function SpeedtestPage() {
   const { isAdmin } = useAuth();
   const [results, setResults] = useState<Speedtest[]>([]);
-  const [range, setRange] = useState("24h");
+  const [win, setWin] = useState<TimeWindow>({ range: "24h" });
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function load() {
-    api.get<Speedtest[]>(`/api/speedtest/results?range=${range}`).then(setResults).catch(() => {});
+    api.get<Speedtest[]>(`/api/speedtest/results?${windowQuery(win)}`).then(setResults).catch(() => {});
   }
 
-  useEffect(load, [range]);
+  useEffect(load, [win]);
 
   async function runTest() {
     setRunning(true);
@@ -38,6 +34,7 @@ export default function SpeedtestPage() {
     }
   }
 
+  const bounds = windowBounds(win);
   const ok = [...results].reverse().filter((r) => r.ok);
   const toPoint = (sel: (r: Speedtest) => number | null) =>
     ok.map((r) => [new Date(r.ts).getTime(), sel(r)] as [number, number | null]);
@@ -47,7 +44,7 @@ export default function SpeedtestPage() {
       <div className="topbar">
         <h1>Speedtest</h1>
         <div className="row">
-          <RangeSelect value={range} onChange={setRange} options={RANGES} />
+          <TimeRangePicker value={win} onChange={setWin} presets={PRESETS} />
           {isAdmin && (
             <button className="primary" onClick={runTest} disabled={running}>
               {running ? "Test läuft…" : "Test starten"}
@@ -60,6 +57,8 @@ export default function SpeedtestPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <h2>Durchsatz (Mbps)</h2>
         <TimeSeriesChart
+          xMin={bounds.min}
+          xMax={bounds.max}
           yName="Mbps"
           series={[
             { name: "Download", data: toPoint((r) => r.download_mbps), color: "#38bdf8" },
@@ -71,6 +70,8 @@ export default function SpeedtestPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <h2>Latenz & Jitter (ms)</h2>
         <TimeSeriesChart
+          xMin={bounds.min}
+          xMax={bounds.max}
           yName="ms"
           series={[
             { name: "Ping", data: toPoint((r) => r.ping_ms), color: "#f59e0b" },
