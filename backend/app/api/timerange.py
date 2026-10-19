@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.timeutils import utcnow
@@ -80,17 +80,19 @@ def thinned_rows(db: Session, model: Any, conditions: list, ts_col, limit: int) 
     Zeiträumen zeigte das Diagramm dadurch nur die letzten Stunden statt des
     gewählten Zeitraums.
     """
-    ids = list(db.execute(select(model.id).where(*conditions).order_by(ts_col)).scalars().all())
-    if len(ids) > limit:
-        stride = math.ceil(len(ids) / limit)
-        picked = ids[::stride]
-        if picked[-1] != ids[-1]:
-            picked.append(ids[-1])
-        ids = picked
-    rows: list = []
-    # In Blöcken abfragen, damit SQLite-Variablenlimits nie greifen.
-    for i in range(0, len(ids), 900):
-        chunk = ids[i : i + 900]
-        rows.extend(db.execute(select(model).where(model.id.in_(chunk))).scalars().all())
-    rows.sort(key=lambda r: getattr(r, ts_col.key), reverse=True)
-    return rows
+    total = db.execute(select(func.count()).select_from(model).where(*conditions)).scalar() or 0
+    if total <= limit:
+        q = select(model).where(*conditions).order_by(ts_col.desc())
+        return list(db.execute(q).scalars().all())
+    # Ausdünnung komplett in SQL (ROW_NUMBER), damit nie mehr als ~limit Zeilen
+    # bzw. IDs aus der Datenbank geladen werden – auch nicht bei range=all.
+    stride = math.ceil(total / limit)
+    rn = func.row_number().over(order_by=ts_col).label("rn")
+    sub = select(model.id.label("id"), rn).where(*conditions).subquery()
+    q = (
+        select(model)
+        .join(sub, model.id == sub.c.id)
+        .where(or_((sub.c.rn - 1) % stride == 0, sub.c.rn == total))
+        .order_by(ts_col.desc())
+    )
+    return list(db.execute(q).scalars().all())
