@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, WanResult, WanTarget } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery } from "../components/TimeRange";
+import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { Badge, ErrorBox, Modal } from "../components/common";
 
 const PRESETS = ["24h", "7d", "30d", "90d", "365d", "all"];
@@ -109,6 +109,8 @@ export default function WanPage() {
             <TimeSeriesChart
               xMin={bounds.min}
               xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
               yName="ms"
               series={[
                 { name: "RTT ø", data: pt((r) => r.rtt_avg), color: "#38bdf8" },
@@ -122,6 +124,8 @@ export default function WanPage() {
             <TimeSeriesChart
               xMin={bounds.min}
               xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
               yName="%"
               series={[{ name: "Loss", data: lossPt, color: "#ef4444", type: "line" }]}
               height={220}

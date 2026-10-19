@@ -77,7 +77,7 @@ input, select {
   margin-bottom: 2px;
 }
 .nav a.active, .nav a:hover { background: var(--bg-card); color: var(--text); }
-.main { flex: 1; padding: 24px; max-width: 1400px; margin: 0 auto; width: 100%; }
+.main { flex: 1; min-width: 0; padding: 24px; width: 100%; }
 .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 h1 { font-size: 22px; margin: 0 0 4px; }
 h2 { font-size: 17px; margin: 0 0 12px; }

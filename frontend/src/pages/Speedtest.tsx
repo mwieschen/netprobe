@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, Speedtest } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery } from "../components/TimeRange";
+import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { ErrorBox } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -59,6 +59,8 @@ export default function SpeedtestPage() {
         <TimeSeriesChart
           xMin={bounds.min}
           xMax={bounds.max}
+          zoomKey={windowQuery(win)}
+          onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
           yName="Mbps"
           series={[
             { name: "Download", data: toPoint((r) => r.download_mbps), color: "#38bdf8" },
@@ -72,6 +74,8 @@ export default function SpeedtestPage() {
         <TimeSeriesChart
           xMin={bounds.min}
           xMax={bounds.max}
+          zoomKey={windowQuery(win)}
+          onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
           yName="ms"
           series={[
             { name: "Ping", data: toPoint((r) => r.ping_ms), color: "#f59e0b" },

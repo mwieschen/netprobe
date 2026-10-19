@@ -58,6 +58,18 @@ export function isLiveWindow(w: TimeWindow): boolean {
   return w.range !== "custom";
 }
 
+// Kleinster Ausschnitt beim Hineinzoomen.
+const MIN_SPAN = MIN;
+
+/** Gezoomten Diagramm-Ausschnitt als absoluten Zeitraum übernehmen. */
+export function zoomWindow(start: number, end: number): TimeWindow {
+  if (end - start < MIN_SPAN) {
+    const c = (start + end) / 2;
+    return { range: "custom", start: c - MIN_SPAN / 2, end: c + MIN_SPAN / 2 };
+  }
+  return { range: "custom", start: Math.round(start), end: Math.round(end) };
+}
+
 function toLocalInput(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
@@ -109,6 +121,43 @@ export default function TimeRangePicker({
     onChange({ range: "custom", start: ns, end: ne });
   }
 
+  // Hinein-/Herauszoomen: Live-Presets springen zum nächstkleineren/-größeren Preset,
+  // ein absoluter Zeitraum wird um seine Mitte halbiert bzw. verdoppelt.
+  function zoom(dir: -1 | 1) {
+    const timed = presets.filter((p) => RANGE_OPTIONS[p]?.ms);
+    if (value.range !== "custom") {
+      if (value.range === "all") {
+        if (dir === -1 && timed.length) select(timed[timed.length - 1]);
+        return;
+      }
+      const i = timed.indexOf(value.range);
+      const next = timed[i + (dir === 1 ? 1 : -1)];
+      if (next) select(next);
+      else if (dir === 1 && presets.includes("all")) select("all");
+      else if (dir === -1) {
+        const { start, end } = currentSpan();
+        onChange(zoomWindow(end - (end - start) / 2, end));
+      }
+      return;
+    }
+    const { start, end } = currentSpan();
+    const span = (end - start) * (dir === 1 ? 2 : 0.5);
+    const now = Date.now();
+    const c = (start + end) / 2;
+    let ns = c - span / 2;
+    let ne = c + span / 2;
+    if (ne > now) {
+      ne = now;
+      ns = now - span;
+    }
+    onChange(zoomWindow(ns, ne));
+  }
+
+  function select(v: string) {
+    setLastPreset(v);
+    onChange(presetWindow(v));
+  }
+
   function onSelect(v: string) {
     if (v === "custom") {
       const { start, end } = currentSpan();
@@ -156,6 +205,8 @@ export default function TimeRangePicker({
         <option value="custom">Benutzerdefiniert…</option>
       </select>
       <button onClick={() => shift(1)} disabled={!canShift || atNow} title="Zeitraum vor">▶</button>
+      <button onClick={() => zoom(-1)} title="Hineinzoomen (kürzerer Zeitraum)" style={{ minWidth: 32 }}>+</button>
+      <button onClick={() => zoom(1)} disabled={value.range === "all"} title="Herauszoomen (längerer Zeitraum)" style={{ minWidth: 32 }}>−</button>
     </div>
   );
 }

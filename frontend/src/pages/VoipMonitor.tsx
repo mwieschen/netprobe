@@ -9,7 +9,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery } from "../components/TimeRange";
+import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { Badge, ErrorBox, Modal } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -199,6 +199,8 @@ export default function VoipMonitorPage() {
             <TimeSeriesChart
               xMin={bounds.min}
               xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
               yName="ms"
               series={[
                 { name: "SIP-Antwort", data: pt((t) => t.sip_response_ms), color: "#38bdf8" },
@@ -212,6 +214,8 @@ export default function VoipMonitorPage() {
             <TimeSeriesChart
               xMin={bounds.min}
               xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
               yName="%"
               height={220}
               series={[{ name: "Loss", data: lossPt, color: "#ef4444" }]}

@@ -3,7 +3,7 @@ import { api, ApiError, PingJob, PingSample, PingSeriesPoint } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
 import { ErrorBox, Modal } from "../components/common";
-import TimeRangePicker, { isLiveWindow, TimeWindow, windowBounds, windowQuery } from "../components/TimeRange";
+import TimeRangePicker, { isLiveWindow, TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { fmtNum } from "../util";
 
 const PRESETS = ["5m", "1h", "6h", "24h", "7d", "30d", "90d", "365d", "all"];
@@ -158,6 +158,8 @@ export default function PingPage() {
               y2Name={bucketed ? "Verlust %" : undefined}
               xMin={bounds.min}
               xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
               series={
                 bucketed
                   ? [

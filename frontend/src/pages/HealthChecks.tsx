@@ -8,7 +8,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery } from "../components/TimeRange";
+import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { Badge, ErrorBox, Modal } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -223,6 +223,8 @@ export default function HealthChecksPage() {
           <TimeSeriesChart
             xMin={bounds.min}
             xMax={bounds.max}
+            zoomKey={`${selected}|${windowQuery(win)}`}
+            onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
             yName="ms"
             height={220}
             series={[{ name: "Antwortzeit", data: rtPt, color: "#38bdf8" }]}
