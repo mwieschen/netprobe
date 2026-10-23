@@ -176,6 +176,26 @@ class Settings(BaseSettings):
     diagnostics_ping_latency_warn_ms: float = 100.0
     diagnostics_max_targets: int = 10
 
+    # --- Wachtl-Clients (netprobe als Zentrale, Probe-API v1) ---
+    # Startwert; zur Laufzeit per /api/clients/settings im KV-Store überschrieben (wachtl_enabled).
+    # Aus: /api/probe/v1/* antwortet mit 404, die Probes puffern bis zu 7 Tage.
+    wachtl_enabled: bool = False
+    # Zertifikat der nginx-HTTPS-Site; daraus wird der SPKI-Pin für das Setup berechnet.
+    wachtl_tls_cert: Path = Path("/etc/netprobe/tls/fullchain.pem")
+    # Adressen, unter denen Probes netprobe erreichen (kommagetrennt, https://…); leer = keine Vorgabe.
+    wachtl_server_urls: str = ""
+    # Untergrenze für Check-Intervalle (Sekunden): 1-s-Pings vieler Clients sprengen SQLite.
+    wachtl_min_interval_s: int = 5
+    wachtl_upload_interval_s: int = 10
+    wachtl_heartbeat_interval_s: int = 30
+    wachtl_config_poll_s: int = 300
+    # 1-min-Buckets so lange, danach zu 1-h-Buckets verdichtet; diese bis wachtl_retention_days.
+    wachtl_minute_retention_days: int = 14
+    wachtl_retention_days: int = 365
+    # Obergrenzen für einen Upload (komprimiert / entpackt).
+    wachtl_max_body_bytes: int = 2 * 1024 * 1024
+    wachtl_max_ingest_bytes: int = 8 * 1024 * 1024
+
     # --- Login / Rate Limiting ---
     login_rate_max_attempts: int = 5
     login_rate_window_s: int = 300
@@ -188,6 +208,11 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def wachtl_server_url_list(self) -> list[str]:
+        return [u.strip().rstrip("/") for u in self.wachtl_server_urls.split(",")
+                if u.strip().startswith("https://")]
 
 
 @lru_cache

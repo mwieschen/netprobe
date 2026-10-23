@@ -16,6 +16,7 @@ from app.api import (
     auth,
     capture_jobs,
     captures,
+    clients,
     diagnostics,
     health,
     health_checks,
@@ -30,6 +31,7 @@ from app.api import (
     traceroute,
     users,
     voip,
+    wachtl_probe,
     wan,
 )
 from app.core.config import settings
@@ -104,8 +106,13 @@ for router in (
     settings_api.router,
     users.router,
     audit_api.router,
+    clients.router,
+    wachtl_probe.router,
 ):
     app.include_router(router)
+
+# Wachtl-Probes erwarten Fehler als {"error": "…"} statt FastAPIs {"detail": "…"}.
+app.add_exception_handler(wachtl_probe.WachtlApiError, wachtl_probe.wachtl_error_handler)
 
 
 # --- Statisches Frontend (Single Page App) ---

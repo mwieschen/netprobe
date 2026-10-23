@@ -770,3 +770,152 @@ class DashboardHealth(BaseModel):
     db_size_mb: float
     captures_size_mb: float
     active_ping_jobs: int
+
+
+# --- Wachtl-Clients (netprobe als Zentrale) ---
+class WachtlSettingsOut(BaseModel):
+    enabled: bool
+    pin: str | None
+    pin_error: str | None
+    server_urls: list[str]
+    min_interval_s: int
+
+
+class WachtlSettingsUpdate(BaseModel):
+    enabled: bool
+
+
+class WachtlSiteCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=255)
+
+
+class WachtlSiteOut(ORMModel):
+    id: int
+    name: str
+    description: str | None
+    created_at: datetime
+
+
+class WachtlTokenCreate(BaseModel):
+    site_id: int
+    max_uses: int = Field(default=50, ge=1, le=10000)
+    days: int = Field(default=30, ge=1, le=365)
+    description: str | None = Field(default=None, max_length=200)
+
+
+class WachtlTokenOut(ORMModel):
+    id: int
+    site_id: int
+    description: str | None
+    expires_at: datetime
+    max_uses: int
+    uses: int
+    revoked: bool
+    created_by: str | None
+    created_at: datetime
+
+
+class WachtlTokenCreated(WachtlTokenOut):
+    # Klartext nur in dieser einen Antwort; gespeichert wird nur der Hash.
+    token: str
+
+
+class WachtlCheckBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    target: str = Field(min_length=1, max_length=255)
+    role: str = Field(default="target", pattern="^(target|gateway|reference)$")
+    interval_s: int = Field(default=5, ge=1, le=3600)
+    timeout_ms: int = Field(default=1000, ge=100, le=10000)
+    site_id: int | None = None
+    enabled: bool = True
+
+
+class WachtlCheckCreate(WachtlCheckBase):
+    pass
+
+
+class WachtlCheckUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    target: str | None = Field(default=None, min_length=1, max_length=255)
+    role: str | None = Field(default=None, pattern="^(target|gateway|reference)$")
+    interval_s: int | None = Field(default=None, ge=1, le=3600)
+    timeout_ms: int | None = Field(default=None, ge=100, le=10000)
+    site_id: int | None = None
+    enabled: bool | None = None
+
+
+class WachtlCheckOut(ORMModel):
+    id: int
+    name: str
+    type: str
+    target: str
+    role: str
+    interval_s: int
+    timeout_ms: int
+    site_id: int | None
+    enabled: bool
+    created_at: datetime
+
+
+class WachtlProbeOut(BaseModel):
+    id: int
+    site_id: int
+    site_name: str
+    hostname: str
+    os: str | None
+    version: str | None
+    status: str
+    online: bool
+    created_at: datetime
+    last_seen: datetime | None
+    last_ip: str | None
+    buffer_items: int
+    uptime_s: int
+    addresses: list[str]
+    deregistered_at: datetime | None
+
+
+class WachtlProbeUpdate(BaseModel):
+    status: str = Field(pattern="^(active|disabled)$")
+
+
+class WachtlSeriesPoint(PingSeriesPoint):
+    jitter_ms: float | None
+
+
+class WachtlCell(BaseModel):
+    check_id: int
+    state: str
+    loss_pct: float | None
+    rtt_avg: float | None
+    jitter_ms: float | None
+    count: int
+
+
+class WachtlMatrixProbe(BaseModel):
+    probe_id: int
+    hostname: str
+    online: bool
+    status: str
+    last_seen: datetime | None
+    cells: list[WachtlCell]
+
+
+class WachtlMatrixCheck(BaseModel):
+    id: int
+    name: str
+    target: str
+    role: str
+
+
+class WachtlMatrixSite(BaseModel):
+    site_id: int
+    name: str
+    checks: list[WachtlMatrixCheck]
+    probes: list[WachtlMatrixProbe]
+
+
+class WachtlOverview(BaseModel):
+    sites: list[WachtlMatrixSite]
+    window_s: int

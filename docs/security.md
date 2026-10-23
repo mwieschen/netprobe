@@ -74,11 +74,28 @@ Benutzern sowie Konfigurationsänderungen. Einsehbar unter *Einstellungen → Au
 
 ## Transport (TLS)
 
-Für den produktiven Betrieb wird **HTTPS** empfohlen:
-1. Zertifikat/Key unter `/etc/netprobe/tls/` ablegen (Let's Encrypt oder intern signiert).
-2. Den TLS-`server`-Block in `deploy/nginx/netprobe.conf` aktivieren.
-3. `NETPROBE_HTTPS_ENABLED=true` in `/etc/netprobe/netprobe.env` setzen (→ Secure-Cookies).
-4. nginx neu laden.
+`install.sh` richtet HTTPS auf Port 443 ein (`setup_tls`): ein selbstsigniertes Zertifikat
+unter `/etc/netprobe/tls/` (`privkey.pem` 0600 root, `fullchain.pem` 0644). Der Schlüssel
+wird nur einmal erzeugt; das Zertifikat wird mit demselben Schlüssel erneuert, wenn es
+fehlt oder in weniger als 30 Tagen abläuft. Port 80 bleibt für die Weboberfläche aktiv.
+
+Eigenes Zertifikat (Let's Encrypt, interne CA): Dateien ersetzen und nginx neu laden.
+**Achtung:** Wachtl-Probes prüfen den SPKI-Pin des Schlüssels – ein neuer Schlüssel macht
+alle installierten Probes unbrauchbar, bis sie mit dem neuen Pin neu registriert sind.
+Ausschließlich HTTPS: Umleitung 80 → 443 ergänzen und `NETPROBE_HTTPS_ENABLED=true` in
+`/etc/netprobe/netprobe.env` setzen (→ Secure-Cookies).
+
+## Wachtl-Probe-API (`/api/probe/v1`)
+
+Der einzige Endpunkt, den Client-PCs erreichen müssen; standardmäßig **abgeschaltet**
+(404), Einschalten auf der Seite „Clients“. Details: `docs/wachtl-zentrale.md`.
+- Enrollment nur mit Token (Hash gespeichert, begrenzte Nutzungen und Laufzeit, widerrufbar);
+  Fehlversuche je Quell-IP rate-limitiert. Probe-Token `<id>.<secret>` nur als SHA-256,
+  Vergleich zeitkonstant. Deaktivierte Probes bleiben auch bei Neuinstallation gesperrt.
+- Ingest: nur `check_id` wird übernommen (muss der Probe zugewiesen sein), feste
+  Metrik-Liste, Zeitfenster −8 Tage/+5 min, Body ≤ 2 MB, entpackt ≤ 8 MB (gzip-Bombe).
+- Daten der Probes erreichen nie `proc.py`; Check-Ziele setzt nur der Admin (validiert).
+- Enrollment, Abmeldung, Token und Check-Änderungen landen im Audit-Log.
 
 ## VoIP-/3CX-Verbindungstest
 

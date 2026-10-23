@@ -132,3 +132,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .sidebar.open { transform: translateX(0); }
   .main { padding: 16px; }
 }
+
+/* Befehlszeile / Token zum Kopieren (Clients-Seite) */
+.codeblock {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border, rgba(127,127,127,0.3));
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
