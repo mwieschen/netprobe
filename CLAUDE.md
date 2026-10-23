@@ -305,7 +305,16 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   (path change, bandwidth/MOS below threshold, errors) go to `WachtlEvent` with `notified_at` — the source for
   Phase 4 notifications; outages stay computed (`wachtl_analysis`). `rtp_reflector.py` is a protocol-compatible,
   rate-limited UDP reflector (asyncio endpoint in-process, `resume()` in the lifespan, KV on/off+port; tests
-  disable it via `NETPROBE_WACHTL_RTP_ENABLED=false` in conftest). Phase 4: `docs/wachtl-zentrale.md`.
+  disable it via `NETPROBE_WACHTL_RTP_ENABLED=false` in conftest). Phase 4 (email only):
+  `/api/clients/notify` (`clients_notify.py`, admin-only) for SMTP settings (KV `wachtl_notify`; password
+  Fernet-encrypted with a key derived from `secret_key`, write-only — never returned, never logged; new dep
+  `cryptography`), recipients (`WachtlRecipient`: site, min severity, categories), test mail, send log
+  (`WachtlNotification`). `wachtl_notify.run_once()` (scheduler job `wachtl_notify`, every minute, exempt from
+  the automation pause like housekeeping) reconciles current situations (ongoing incidents ≥ N min, probes
+  offline) against `WachtlAlertState` (one mail per open, one per close = recovery; a closed key that comes back
+  is reopened), consumes `WachtlEvent.notified_at` and new reports, then sends one digest per recipient
+  (pure filtering/rendering in `wachtl_notify_compose.py`) outside the DB transaction. While disabled it still
+  advances state, so enabling never floods. This is the only place netprobe sends outbound messages.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
   host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
   inputs. `iperf3` is added to the installer's apt list; the optional

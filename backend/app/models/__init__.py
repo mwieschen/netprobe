@@ -21,6 +21,7 @@ from app.models.traceroute import GeoipCache, Traceroute, TracerouteHop, Tracero
 from app.models.user import User
 from app.models.voip import VoipServer, VoipTest
 from app.models.wachtl import (
+    WachtlAlertState,
     WachtlBandwidthRun,
     WachtlCheck,
     WachtlCommand,
@@ -29,8 +30,10 @@ from app.models.wachtl import (
     WachtlFinding,
     WachtlHopSample,
     WachtlIngestBatch,
+    WachtlNotification,
     WachtlPathRun,
     WachtlProbe,
+    WachtlRecipient,
     WachtlReport,
     WachtlRtpRun,
     WachtlSample,
@@ -65,6 +68,7 @@ __all__ = [
     "User",
     "VoipServer",
     "VoipTest",
+    "WachtlAlertState",
     "WachtlBandwidthRun",
     "WachtlCheck",
     "WachtlCommand",
@@ -73,8 +77,10 @@ __all__ = [
     "WachtlFinding",
     "WachtlHopSample",
     "WachtlIngestBatch",
+    "WachtlNotification",
     "WachtlPathRun",
     "WachtlProbe",
+    "WachtlRecipient",
     "WachtlReport",
     "WachtlRtpRun",
     "WachtlSample",

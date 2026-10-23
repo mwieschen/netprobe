@@ -85,6 +85,19 @@ alle installierten Probes unbrauchbar, bis sie mit dem neuen Pin neu registriert
 Ausschließlich HTTPS: Umleitung 80 → 443 ergänzen und `NETPROBE_HTTPS_ENABLED=true` in
 `/etc/netprobe/netprobe.env` setzen (→ Secure-Cookies).
 
+## E-Mail-Benachrichtigung (Wachtl-Clients)
+
+Einzige Stelle, an der netprobe selbst Nachrichten verschickt – nur an den im Web-UI eingetragenen
+SMTP-Server und die eingetragenen Empfänger, nur wenn eingeschaltet (Standard: aus).
+- SMTP-Passwort verschlüsselt gespeichert (Fernet, Schlüssel aus `NETPROBE_SECRET_KEY`), nie über die API
+  ausgeliefert, nie geloggt; Audit-Log vermerkt nur „geändert“. Einstellungen, Empfänger und Protokoll nur für
+  Admins.
+- Zertifikatsprüfung des SMTP-Servers standardmäßig an; Abschalten ist ein bewusstes Opt-in (Warnung im UI).
+- Empfänger- und Absenderadressen werden geprüft, Betreffzeilen von Steuerzeichen bereinigt
+  (`email.message.EmailMessage` verhindert Header-Injection zusätzlich).
+- Höchstzahl Mails je Empfänger und Stunde; Mails enthalten Rechnernamen, Benutzernamen und Freitext aus
+  Störungsmeldungen – Empfänger entsprechend wählen.
+
 ## Wachtl-Probe-API (`/api/probe/v1`)
 
 Der einzige Endpunkt, den Client-PCs erreichen müssen; standardmäßig **abgeschaltet**

@@ -351,3 +351,60 @@ class WachtlEvent(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     notified_at: Mapped[datetime | None] = utc_column(nullable=True)
+
+
+class WachtlRecipient(Base):
+    """Empfänger der E-Mail-Benachrichtigung (im Web-UI gepflegt)."""
+
+    __tablename__ = "wachtl_recipients"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # NULL = alle Standorte
+    site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wachtl_sites.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    # "info", "warning" oder "critical": geringere Schwere wird nicht gemeldet
+    min_severity: Mapped[str] = mapped_column(String(16), default="warning", nullable=False)
+    notify_incidents: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_recovery: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_events: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_reports: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = utc_column(default=utcnow, nullable=False)
+
+
+class WachtlAlertState(Base):
+    """Zustand einer meldepflichtigen Lage (Störung, PC offline, Störungsmeldung): wann begonnen, wann vorbei,
+    wann jeweils benachrichtigt. Verhindert doppelte Mails und ermöglicht die Entwarnung."""
+
+    __tablename__ = "wachtl_alert_states"
+
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    # "incident", "offline" oder "report"
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    site_id: Mapped[int] = mapped_column(
+        ForeignKey("wachtl_sites.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opened_at: Mapped[datetime] = utc_column(nullable=False)
+    closed_at: Mapped[datetime | None] = utc_column(index=True, nullable=True)
+    notified_open_at: Mapped[datetime | None] = utc_column(nullable=True)
+    notified_close_at: Mapped[datetime | None] = utc_column(nullable=True)
+
+
+class WachtlNotification(Base):
+    """Versandprotokoll der Benachrichtigung."""
+
+    __tablename__ = "wachtl_notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ts: Mapped[datetime] = utc_column(default=utcnow, index=True, nullable=False)
+    recipient: Mapped[str] = mapped_column(String(254), nullable=False)
+    subject: Mapped[str] = mapped_column(String(300), nullable=False)
+    items: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ok: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
