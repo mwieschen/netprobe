@@ -7,7 +7,7 @@ Updates laufen mit demselben Befehl wie die Installation:
 ```bash
 sudo bash /opt/netprobe/install.sh
 # oder
-curl -sSL https://raw.githubusercontent.com/youruser/netprobe/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/mwieschen/netprobe/main/install.sh | sudo bash
 ```
 
 Der Installer findet `/opt/netprobe/venv`, wechselt in den **Smart-Update**-Modus und

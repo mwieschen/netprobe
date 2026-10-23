@@ -69,7 +69,7 @@ Architektur- und Sicherheitsdetails: [`docs/architecture.md`](docs/architecture.
 ## Schnellinstallation (ein Befehl)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/youruser/netprobe/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/mwieschen/netprobe/main/install.sh | sudo bash
 ```
 
 Derselbe Befehl installiert **und** aktualisiert – der Installer erkennt selbst, was zu
@@ -100,7 +100,7 @@ im entpackten Verzeichnis ausführen – gleiches Verhalten.
 Ausführlich: [`docs/installation.md`](docs/installation.md) (Installation, Optionen,
 Umgebungsvariablen) und [`docs/update.md`](docs/update.md) (Update, Snapshots, Rollback).
 
-> **Hinweis:** `youruser/netprobe` ist ein Platzhalter – im Befehl oben **und** als
+> **Hinweis:** `mwieschen/netprobe` ist ein Platzhalter – im Befehl oben **und** als
 > Default `NETPROBE_REPO` in `install.sh` durch das echte GitHub-Repository ersetzen.
 
 Nach Abschluss:
