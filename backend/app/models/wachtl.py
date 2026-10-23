@@ -129,3 +129,63 @@ class WachtlSample(Base):
     jitter_sum: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     jitter_n: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ttl: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class WachtlReport(Base):
+    """Störungsmeldung eines Benutzers (Tray-Symbol „Problem melden“), idempotent je (Probe, report_id)."""
+
+    __tablename__ = "wachtl_reports"
+    __table_args__ = (UniqueConstraint("probe_id", "report_id", name="uq_wachtl_reports_probe_report"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    probe_id: Mapped[int] = mapped_column(
+        ForeignKey("wachtl_probes.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    site_id: Mapped[int] = mapped_column(
+        ForeignKey("wachtl_sites.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    report_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    occurred_at: Mapped[datetime] = utc_column(index=True, nullable=False)
+    received_at: Mapped[datetime] = utc_column(default=utcnow, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    duration: Mapped[str] = mapped_column(String(16), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reported_user: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False)
+    # "open" oder "done"
+    status: Mapped[str] = mapped_column(String(8), default="open", nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    done_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    done_at: Mapped[datetime | None] = utc_column(nullable=True)
+    # Automatisch oder manuell gestarteter netprobe-Diagnose-Lauf (ohne FK: Lauf kann gelöscht werden)
+    diagnostic_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class WachtlFinding(Base):
+    """Client-Hinweis einer Probe (Kabel getrennt, Link-Geschwindigkeit, Treiber …), Upsert je finding_id."""
+
+    __tablename__ = "wachtl_findings"
+    __table_args__ = (UniqueConstraint("probe_id", "finding_id", name="uq_wachtl_findings_probe_finding"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    probe_id: Mapped[int] = mapped_column(
+        ForeignKey("wachtl_probes.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    site_id: Mapped[int] = mapped_column(
+        ForeignKey("wachtl_sites.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    finding_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    # "active" oder "resolved"
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    adapter: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    adapter_description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    solution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    detected_at: Mapped[datetime] = utc_column(index=True, nullable=False)
+    resolved_at: Mapped[datetime | None] = utc_column(nullable=True)
+    received_at: Mapped[datetime] = utc_column(default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = utc_column(default=utcnow, nullable=False)

@@ -1,8 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, WachtlCheck, WachtlProbe, WachtlSeriesPoint } from "../api";
+import {
+  api,
+  ApiError,
+  WachtlCheck,
+  WachtlDiagnoseStarted,
+  WachtlFinding,
+  WachtlIncident,
+  WachtlProbe,
+  WachtlReport,
+  WachtlSeriesPoint,
+} from "../api";
+import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
 import { ErrorBox } from "../components/common";
+import { FindingList, IncidentTable, ReportTable } from "../components/WachtlEvents";
 import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -16,6 +28,7 @@ function fmtUptime(s: number): string {
 }
 
 export default function ClientDetailPage() {
+  const { isAdmin } = useAuth();
   const id = Number(useParams().id);
   const [probe, setProbe] = useState<WachtlProbe | null>(null);
   const [checks, setChecks] = useState<WachtlCheck[]>([]);
@@ -23,6 +36,32 @@ export default function ClientDetailPage() {
   const [points, setPoints] = useState<WachtlSeriesPoint[]>([]);
   const [win, setWin] = useState<TimeWindow>({ range: "24h" });
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [reports, setReports] = useState<WachtlReport[]>([]);
+  const [findings, setFindings] = useState<WachtlFinding[]>([]);
+  const [incidents, setIncidents] = useState<WachtlIncident[]>([]);
+
+  function loadEvents() {
+    api.get<WachtlReport[]>(`/api/clients/reports?probe_id=${id}&range=90d`).then(setReports).catch(() => setReports([]));
+    api.get<WachtlFinding[]>(`/api/clients/findings?probe_id=${id}&days=30`).then(setFindings).catch(() => setFindings([]));
+  }
+  useEffect(loadEvents, [id]);
+  useEffect(() => {
+    if (!probe) return;
+    api.get<WachtlIncident[]>(`/api/clients/incidents?range=7d&site_id=${probe.site_id}`)
+      .then((all) => setIncidents(all.filter((i) => i.probe_ids.includes(id))))
+      .catch(() => setIncidents([]));
+  }, [probe, id]);
+
+  async function diagnose() {
+    try {
+      const res = await api.post<WachtlDiagnoseStarted>(`/api/clients/probes/${id}/diagnose`);
+      setInfo(`Diagnose gestartet (${res.targets.join(", ")}). Ergebnis in etwa einer Minute unter Netzwerk-Diagnose.`);
+      setError(null);
+    } catch (err) {
+      setError((err as ApiError).detail);
+    }
+  }
 
   useEffect(() => {
     api.get<WachtlProbe>(`/api/clients/probes/${id}`).then((p) => {
@@ -59,8 +98,10 @@ export default function ClientDetailPage() {
         <h1>
           <Link to="/clients">Clients</Link> / {probe?.hostname ?? "…"}
         </h1>
+        {isAdmin && probe && <button className="primary" onClick={diagnose}>Diagnose starten</button>}
       </div>
       <ErrorBox error={error} />
+      {info && <div className="info-box" onClick={() => setInfo(null)}>{info}</div>}
 
       {probe && (
         <div className="grid cols-4" style={{ marginBottom: 16 }}>
@@ -123,6 +164,7 @@ export default function ClientDetailPage() {
               xMax={bounds.max}
               zoomKey={`${selected}|${windowQuery(win)}`}
               onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              markers={reports.map((r) => ({ ts: new Date(r.occurred_at).getTime(), label: `Meldung: ${r.category_label}` }))}
               series={[
                 { name: "RTT ø", data: points.map((p) => [t(p), p.rtt_avg]), color: "#38bdf8" },
                 { name: "RTT max", data: points.map((p) => [t(p), p.rtt_max]), color: "#64748b" },
@@ -139,6 +181,20 @@ export default function ClientDetailPage() {
           </div>
         </>
       )}
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Störungen (7 Tage)</h2>
+        <IncidentTable incidents={incidents} showSite={false} />
+      </div>
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Störungsmeldungen</h2>
+        <ReportTable reports={reports} isAdmin={isAdmin} onChanged={loadEvents} setError={setError} onInfo={setInfo}
+          showProbe={false} />
+      </div>
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Client-Hinweise (30 Tage)</h2>
+        <FindingList findings={findings} showProbe={false} />
+      </div>
     </div>
   );
 }

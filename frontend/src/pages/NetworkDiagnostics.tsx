@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   api,
   ApiError,
@@ -77,6 +78,13 @@ export default function NetworkDiagnosticsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSavePreset, setShowSavePreset] = useState(false);
+  // ?run=<id> öffnet einen Lauf direkt (z. B. aus einer Störungsmeldung der Clients-Seite).
+  const [searchParams] = useSearchParams();
+  const runParam = searchParams.get("run");
+  useEffect(() => {
+    if (!runParam) return;
+    api.get<DiagnosticRun>(`/api/diagnostics/runs/${encodeURIComponent(runParam)}`).then(setSelected).catch(() => {});
+  }, [runParam]);
 
   function loadPresets() {
     api.get<DiagnosticPreset[]>("/api/diagnostics/presets").then(setPresets).catch(() => {});

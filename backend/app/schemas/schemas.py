@@ -919,3 +919,74 @@ class WachtlMatrixSite(BaseModel):
 class WachtlOverview(BaseModel):
     sites: list[WachtlMatrixSite]
     window_s: int
+
+
+class WachtlReportOut(BaseModel):
+    id: int
+    probe_id: int
+    site_id: int
+    probe_hostname: str
+    site_name: str
+    occurred_at: datetime
+    received_at: datetime
+    category: str
+    category_label: str
+    duration: str
+    duration_label: str
+    description: str | None
+    reported_user: str | None
+    hostname: str
+    status: str
+    note: str | None
+    done_by: str | None
+    done_at: datetime | None
+    diagnostic_run_id: int | None
+
+
+class WachtlReportStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(open|done)$")
+    note: str | None = Field(default=None, max_length=500)
+
+
+class WachtlFindingOut(BaseModel):
+    id: int
+    probe_id: int
+    probe_hostname: str
+    site_id: int
+    kind: str
+    kind_label: str
+    severity: str
+    state: str
+    adapter: str | None
+    adapter_description: str | None
+    title: str
+    message: str | None
+    solution: str | None
+    details: dict[str, str]
+    detected_at: datetime
+    resolved_at: datetime | None
+
+
+class WachtlIncidentOut(BaseModel):
+    scope: str
+    cause: str
+    cause_label: str
+    hint: str
+    site_id: int
+    site_name: str
+    probe_ids: list[int]
+    probe_hostnames: list[str]
+    check_id: int | None
+    check_ids: list[int]
+    check_names: list[str]
+    start: datetime
+    end: datetime
+    minutes: int
+    affected_minutes: int
+    max_loss_pct: float | None
+    ongoing: bool
+
+
+class WachtlDiagnoseStarted(BaseModel):
+    started: bool
+    targets: list[str]

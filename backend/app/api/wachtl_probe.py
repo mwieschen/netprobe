@@ -2,8 +2,8 @@
 
 Vertrag wie Wachtl 0.9 (``server/wachtl/api_probe.py``): Enrollment mit Token, Konfiguration mit
 ETag, Ingest im Prometheus-Textformat (idempotent per ``X-Batch-Id``), Heartbeat, Abmeldung.
-Fehler antworten wie Wachtl mit ``{"error": "…"}``. Phase 1: nur Ping-Checks; ``/report``,
-``/findings`` und ``/results/*`` folgen (docs/wachtl-zentrale.md).
+Fehler antworten wie Wachtl mit ``{"error": "…"}``. Ping-Checks, Störungsmeldungen (``/report``) und
+Client-Hinweise (``/findings``); ``/results/*`` folgen (docs/wachtl-zentrale.md).
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import hmac
 import ipaddress
 import json
 import time
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Request, Response
@@ -27,7 +28,7 @@ from app.core.security import RateLimiter
 from app.core.timeutils import utcnow
 from app.db.session import get_db, session_scope
 from app.models.wachtl import WachtlEnrollToken, WachtlIngestBatch, WachtlProbe, WachtlSite
-from app.services import audit, wachtl_service
+from app.services import audit, wachtl_events, wachtl_service
 from app.services.wachtl_ingest import (
     BATCH_ID_RE,
     PROBE_HOST_RE,
@@ -212,12 +213,17 @@ def heartbeat(request: Request, data: Any = Body(default=None), db: Session = De
         except (TypeError, ValueError):
             return 0
 
+    uptime = _int("uptime_s")
+    if probe.uptime_s and uptime < probe.uptime_s:
+        # Dienst neu gestartet: ältere aktive Hinweise kann die Probe nicht mehr auflösen
+        wachtl_service.close_stale_findings(db, probe.id, utcnow() - timedelta(seconds=uptime),
+                                            "Nicht mehr bestätigt – Wachtl-Dienst neu gestartet")
     probe.last_seen = utcnow()
     probe.last_ip = client_ip(request)
     probe.version = str(data.get("version", probe.version or ""))[:50]
     probe.os = str(data.get("os", probe.os or ""))[:200]
     probe.buffer_items = _int("buffer_items")
-    probe.uptime_s = _int("uptime_s")
+    probe.uptime_s = uptime
     probe.addresses_json = json.dumps(_addresses(data.get("addresses")))
     _, etag = wachtl_service.config_payload(db, probe)
     db.commit()
@@ -238,3 +244,49 @@ def deregister(request: Request, db: Session = Depends(get_db),
     db.commit()
     log.info("Probe %s (%s) hat sich abgemeldet", probe.id, probe.hostname)
     return Response(status_code=204)
+
+
+@router.post("/report")
+def report(request: Request, data: Any = Body(default=None), db: Session = Depends(get_db),
+           probe: WachtlProbe = Depends(current_probe)) -> JSONResponse:
+    """Störungsmeldung eines Benutzers (Tray-Symbol), zugestellt über den lokalen Wachtl-Dienst.
+
+    201 = neu gespeichert, 200 = dieselbe report_id gab es schon (Nachlieferung). Eine neue Meldung
+    startet optional einen netprobe-Diagnose-Lauf (``wachtl_report_diagnostics``).
+    """
+    try:
+        values = wachtl_events.validate_report(data, int(time.time()))
+    except wachtl_events.EventError as exc:
+        raise WachtlApiError(400, str(exc)) from exc
+    rep, created = wachtl_service.store_report(db, probe, values)
+    db.commit()
+    if created:
+        log.info("Probe %s: Störungsmeldung %s (%s) von %s", probe.hostname, rep.id, values["category"],
+                 values["user"] or "unbekannt")
+        if settings.wachtl_report_diagnostics:
+            try:
+                wachtl_service.start_diagnostics(probe.id, report_id=rep.id, automatic=True)
+            except (wachtl_service.DiagnoseBusy, ValueError) as exc:
+                log.info("Keine automatische Diagnose für Meldung %s: %s", rep.id, exc)
+    return JSONResponse({"id": rep.id}, status_code=201 if created else 200)
+
+
+@router.post("/findings")
+def findings(data: Any = Body(default=None), db: Session = Depends(get_db),
+             probe: WachtlProbe = Depends(current_probe)) -> JSONResponse:
+    """Client-Hinweise der Probe (Kabel getrennt, Link-Geschwindigkeit, Treiber …), Upsert je finding_id;
+    ungültige Einträge werden übersprungen und in ``errors`` genannt."""
+    try:
+        items, errors = wachtl_events.validate_findings_batch(data, int(time.time()))
+    except wachtl_events.EventError as exc:
+        raise WachtlApiError(400, str(exc)) from exc
+    new = 0
+    for values in items:
+        if wachtl_service.store_finding(db, probe, values):
+            new += 1
+            log.info("Probe %s: Hinweis %s (%s) – %s", probe.hostname, values["kind"], values["severity"],
+                     values["title"])
+    for e in errors:
+        log.warning("Probe %s: Hinweis abgelehnt – %s", probe.hostname, e)
+    db.commit()
+    return JSONResponse({"stored": len(items), "new": new, "rejected": len(errors), "errors": errors[:10]})

@@ -878,3 +878,69 @@ export interface WachtlOverview {
     }[];
   }[];
 }
+
+export interface WachtlReport {
+  id: number;
+  probe_id: number;
+  site_id: number;
+  probe_hostname: string;
+  site_name: string;
+  occurred_at: string;
+  received_at: string;
+  category: string;
+  category_label: string;
+  duration: string;
+  duration_label: string;
+  description: string | null;
+  reported_user: string | null;
+  hostname: string;
+  status: "open" | "done";
+  note: string | null;
+  done_by: string | null;
+  done_at: string | null;
+  diagnostic_run_id: number | null;
+}
+
+export interface WachtlFinding {
+  id: number;
+  probe_id: number;
+  probe_hostname: string;
+  site_id: number;
+  kind: string;
+  kind_label: string;
+  severity: "info" | "warning" | "critical";
+  state: "active" | "resolved";
+  adapter: string | null;
+  adapter_description: string | null;
+  title: string;
+  message: string | null;
+  solution: string | null;
+  details: Record<string, string>;
+  detected_at: string;
+  resolved_at: string | null;
+}
+
+export interface WachtlIncident {
+  scope: "site" | "probe";
+  cause: "lan" | "wan" | "target" | "probe";
+  cause_label: string;
+  hint: string;
+  site_id: number;
+  site_name: string;
+  probe_ids: number[];
+  probe_hostnames: string[];
+  check_id: number | null;
+  check_ids: number[];
+  check_names: string[];
+  start: string;
+  end: string;
+  minutes: number;
+  affected_minutes: number;
+  max_loss_pct: number | null;
+  ongoing: boolean;
+}
+
+export interface WachtlDiagnoseStarted {
+  started: boolean;
+  targets: string[];
+}

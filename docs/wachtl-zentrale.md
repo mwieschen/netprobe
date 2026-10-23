@@ -1,6 +1,6 @@
 # netprobe als Zentrale für Wachtl-Clients
 
-Stand: 2026-10-23 · Phase 1 (Ping) umgesetzt
+Stand: 2026-10-23 · Phase 1 (Ping) und Phase 2 (Meldungen, Hinweise, Ausfallanalyse, Diagnose) umgesetzt
 
 ## Ziel
 
@@ -52,18 +52,18 @@ Die Probes übernehmen die Liste per `/config`.
 | Endpunkt | Stand | Bemerkung |
 | --- | --- | --- |
 | `POST /enroll` | ✅ Phase 1 | Enrollment-Token → `{probe_id, token, site_name}`; Token `<probe_id>.<secret>`, nur Hash gespeichert |
-| `GET /config` | ✅ Phase 1 | ETag/304; nur Ping-Checks, `client_findings`, iperf3-Gegenstelle und RTP-Reflektor aus |
+| `GET /config` | ✅ Phase 1 | ETag/304; nur Ping-Checks; `client_findings` an (Phase 2), iperf3-Gegenstelle und RTP-Reflektor aus |
 | `POST /ingest` | ✅ Phase 1 | Prometheus-Text (gzip), `X-Batch-Id` idempotent (9 Tage); `wachtl_ping_up/rtt_ms/ttl/jitter_ms` |
-| `POST /heartbeat` | ✅ Phase 1 | online/offline, Version, Puffer, Adressen; `commands` immer leer |
+| `POST /heartbeat` | ✅ Phase 1 | online/offline, Version, Puffer, Adressen; `commands` immer leer; Dienst-Neustart (Uptime kleiner) schließt alte aktive Hinweise |
 | `POST /deregister` | ✅ Phase 1 | Token sofort ungültig, Messwerte bleiben |
-| `POST /report` | Phase 2 | Störungsmeldung vom Tray → Auslöser für Analyse |
-| `POST /findings` | Phase 2 | Client-Hinweise (Kabel, Link, Treiber) |
+| `POST /report` | ✅ Phase 2 | Störungsmeldung vom Tray; 201 neu / 200 dieselbe `report_id`; startet optional eine Diagnose |
+| `POST /findings` | ✅ Phase 2 | Client-Hinweise (Kabel, Link, Treiber), Upsert je `finding_id`, höchstens 50 je Sendung |
 | `POST /results/path` | Phase 3 | Traceroute/Hops, Pfadwechsel |
 | `POST /results/bandwidth` | Phase 3 | iperf3/HTTP-Speedtest |
 | `POST /results/rtp` | Phase 3 | Sprachtest (MOS); Reflektor auf netprobe nötig |
 
-Bis Phase 2 sind `/report` und `/findings` nicht vorhanden (404): „Problem melden“ im Tray-Symbol der Probes
-läuft ins Leere, die Probe puffert die Meldung und versucht es weiter.
+Validierung, Kategorien und Texte wie Wachtl (`app/services/wachtl_events.py`). Ein behobener Hinweis wird durch
+eine ältere Nachlieferung nicht wieder aktiv; beim Beheben bleiben Problem und Lösungsvorschlag stehen.
 
 ## Datenmenge
 
@@ -80,11 +80,40 @@ Aus den letzten 5 Minuten je Probe und Check: **gestört** (alle Pings verloren)
 und Verlust ≥ `report_ping_loss_warn_pct`, oder RTT ø > `diagnostics_ping_latency_warn_ms`), **OK**, **keine Daten**
 (auch wenn die Probe offline ist: kein Heartbeat seit 90 s).
 
-## Nächste Phasen
+## Störungen mit Ursache (Phase 2)
 
-**Phase 2 – Analyse**: Ausfälle mit Ursache je Standort (alle Probes eines Standorts betroffen → WAN/Gateway,
-einzelne → Client/LAN); Störungsmeldung oder Ausfall startet optional einen netprobe-Diagnose-Lauf
-(`diagnostics_service`) und verknüpft das Ergebnis; Client-Hinweise anzeigen.
+`app/services/wachtl_analysis.py` (rein) bewertet je PC und Minute; ein Check gilt als gestört ab
+`NETPROBE_WACHTL_OUTAGE_LOSS_PCT` (25 %) Verlust in der Minute:
+
+| Ursache | Erkennbar an |
+| --- | --- |
+| **Gateway/LAN** | ein Check mit Rolle *Gateway* gestört |
+| **WAN/Internet** | Gateway in Ordnung, aber *alle* Internet-Referenzen gestört |
+| **Ziel** | nur einzelne Ziele/Referenzen gestört |
+| **Keine Messwerte** | Lücke ohne jede Messung zwischen zwei Minuten mit Daten (ab 2 Intervallen, mind. 2 min) |
+
+- Sind in einer Minute **alle** (mindestens zwei) PCs eines Standorts mit derselben Ursache Gateway/LAN, WAN
+  oder Keine Messwerte betroffen, wird daraus eine Störung **des Standorts**; die Einzelstörungen entfallen.
+- Gestörte Minuten werden zu **Episoden** verbunden (bis zu 2 ungestörte Minuten dazwischen). Ursache ist die
+  häufigste der Episode, bei Gleichstand LAN vor WAN vor Ziel – schwankender Paketverlust ergibt so eine
+  Störung statt Dutzender, die zwischen WAN und Ziel springen.
+- Minutenauflösung, höchstens `NETPROBE_WACHTL_INCIDENT_MAX_DAYS` (14) zurück; berechnet bei Abruf
+  (`GET /api/clients/incidents`), nicht gespeichert.
+
+## Diagnose bei Störungsmeldung (Phase 2)
+
+Eine neue Störungsmeldung startet – wenn `NETPROBE_WACHTL_REPORT_DIAGNOSTICS` (an) – im Hintergrund einen
+netprobe-Diagnose-Lauf (Ping, MTU, Traceroute) **von netprobe aus** zum PC (LAN-Adresse aus dem Heartbeat,
+sonst Absenderadresse) und zu den Zielen/Referenzen seines Standorts (ohne `gateway`). Höchstens einer je
+Standort in `NETPROBE_WACHTL_DIAGNOSTICS_COOLDOWN_MIN` (10); der Lauf wird an der Meldung vermerkt und ist
+unter *Netzwerk-Diagnose* (`/diagnostics?run=<id>`) zu sehen. Manuell: „Diagnose“ an der Meldung bzw.
+„Diagnose starten“ auf der PC-Seite (Admin, ohne Sperrzeit).
+
+Meldungen erscheinen auf der Clients-Seite (offen/alle, „Erledigt“ mit Notiz) und als gestrichelte Markierung
+im Graphen des PCs. Meldungen und behobene Hinweise werden nach `NETPROBE_WACHTL_EVENT_RETENTION_DAYS` (365)
+gelöscht.
+
+## Nächste Phasen
 
 **Phase 3 – Weitere Check-Arten**: Pfad, Bandbreite (iperf3-Gegenstelle = vorhandener `iperf3_server`), RTP.
 

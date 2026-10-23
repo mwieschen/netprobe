@@ -145,3 +145,4 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   word-break: break-all;
   user-select: all;
 }
+.info-box { background: rgba(56,189,248,0.12); border: 1px solid #38bdf8; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }

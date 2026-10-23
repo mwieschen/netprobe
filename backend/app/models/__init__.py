@@ -23,8 +23,10 @@ from app.models.voip import VoipServer, VoipTest
 from app.models.wachtl import (
     WachtlCheck,
     WachtlEnrollToken,
+    WachtlFinding,
     WachtlIngestBatch,
     WachtlProbe,
+    WachtlReport,
     WachtlSample,
     WachtlSite,
 )
@@ -59,8 +61,10 @@ __all__ = [
     "VoipTest",
     "WachtlCheck",
     "WachtlEnrollToken",
+    "WachtlFinding",
     "WachtlIngestBatch",
     "WachtlProbe",
+    "WachtlReport",
     "WachtlSample",
     "WachtlSite",
     "WanResult",

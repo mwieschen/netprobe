@@ -6,9 +6,12 @@ Gemeinsam genutzt von der Probe-API (``app.api.wachtl_probe``) und der Admin-API
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import secrets
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Integer, cast, func, or_, select
@@ -20,12 +23,14 @@ from app.core.timeutils import utcnow
 from app.db.session import session_scope
 from app.models.wachtl import (
     WachtlCheck,
+    WachtlFinding,
     WachtlIngestBatch,
     WachtlProbe,
+    WachtlReport,
     WachtlSample,
     WachtlSite,
 )
-from app.services import kvstore
+from app.services import kvstore, wachtl_analysis
 from app.services.wachtl_ingest import BUCKET_S, Bucket, classify_check, merge_bucket, spki_pin_from_pem
 
 log = get_logger("netprobe.wachtl")
@@ -107,14 +112,17 @@ def config_payload(db: Session, probe: WachtlProbe) -> tuple[dict, str]:
     payload = {
         "probe_id": probe.id,
         "checks": checks,
-        # iperf3-Gegenstelle, RTP-Reflektor und Client-Hinweise folgen in Phase 2/3.
+        # iperf3-Gegenstelle und RTP-Reflektor folgen in Phase 3.
         "iperf_server": {"enabled": False, "port": settings.iperf3_server_port},
         "rtp_reflector": {"enabled": False, "port": 5004},
         "server_urls": settings.wachtl_server_url_list,
         "upload_interval_s": settings.wachtl_upload_interval_s,
         "heartbeat_interval_s": settings.wachtl_heartbeat_interval_s,
         "config_poll_s": settings.wachtl_config_poll_s,
-        "client_findings": {"enabled": False, "notify": False},
+        "client_findings": {
+            "enabled": settings.wachtl_client_findings_enabled,
+            "notify": settings.wachtl_client_findings_enabled and settings.wachtl_client_findings_notify,
+        },
     }
     etag = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
     payload["etag"] = etag
@@ -301,3 +309,214 @@ def rollup_and_prune() -> None:
         if groups or n_hour or n_batch:
             log.info("Wachtl: %d Stunden-Buckets verdichtet (%d Minuten-Buckets), %d alte Buckets, "
                      "%d Batch-IDs gelöscht", len(groups), n_min, n_hour, n_batch)
+    n_rep, n_find = prune_events()
+    if n_rep or n_find:
+        log.info("Wachtl: %d Meldungen, %d behobene Hinweise gelöscht", n_rep, n_find)
+
+
+# --- Störungsmeldungen und Client-Hinweise (Phase 2) -----------------------
+def _from_unix(ts: int) -> datetime:
+    return datetime.fromtimestamp(ts, UTC)
+
+
+def store_report(db: Session, probe: WachtlProbe, values: dict) -> tuple[WachtlReport, bool]:
+    """Meldung speichern → (Meldung, neu). Dieselbe report_id derselben Probe wird nicht doppelt
+    gespeichert."""
+    existing = db.execute(select(WachtlReport).where(
+        WachtlReport.probe_id == probe.id, WachtlReport.report_id == values["report_id"])
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+    report = WachtlReport(
+        probe_id=probe.id, site_id=probe.site_id, report_id=values["report_id"],
+        occurred_at=_from_unix(values["occurred_at"]), category=values["category"],
+        duration=values["duration"],
+        description=values["description"] or None, reported_user=values["user"] or None,
+        hostname=values["hostname"] or probe.hostname, status="open",
+    )
+    db.add(report)
+    db.flush()
+    return report, True
+
+
+def store_finding(db: Session, probe: WachtlProbe, values: dict) -> bool:
+    """Hinweis speichern/aktualisieren → True, wenn neu. Ein behobener Hinweis wird durch eine ältere
+    Nachlieferung nicht wieder aktiv (wie Wachtl ``findings.store``)."""
+    now = utcnow()
+    details = dict(values["details"])
+    title = values["title"]
+    if values["state"] == "resolved" and details.get("problem"):
+        # Beim Beheben schickt die Probe den Entwarnungstext und das ursprüngliche Problem in details.
+        details["resolution"] = (values["message"] or title)[:200]
+        title = details["problem"][:120]
+    existing = db.execute(select(WachtlFinding).where(
+        WachtlFinding.probe_id == probe.id, WachtlFinding.finding_id == values["finding_id"])
+    ).scalar_one_or_none()
+    resolved_at = _from_unix(values["resolved_at"]) if values["resolved_at"] is not None else None
+    if existing is not None:
+        if existing.state == "resolved" and values["state"] == "active":
+            return False
+        if values["state"] == "resolved":
+            # Problem, Text und Lösungsvorschlag des aktiven Hinweises bleiben stehen
+            merged = {**json.loads(existing.details_json or "{}"), **details}
+            existing.state = "resolved"
+            existing.resolved_at = resolved_at
+            existing.details_json = json.dumps(merged, ensure_ascii=False, sort_keys=True)
+            existing.updated_at = now
+            return False
+        target = existing
+    else:
+        target = WachtlFinding(probe_id=probe.id, site_id=probe.site_id, finding_id=values["finding_id"],
+                               received_at=now)
+        db.add(target)
+    target.kind = values["kind"]
+    target.severity = values["severity"]
+    target.state = values["state"]
+    target.adapter = values["adapter"] or None
+    target.adapter_description = values["adapter_description"] or None
+    target.title = title
+    target.message = values["message"] or None
+    target.solution = values["solution"] or None
+    target.details_json = json.dumps(details, ensure_ascii=False, sort_keys=True)
+    target.detected_at = _from_unix(values["detected_at"])
+    target.resolved_at = resolved_at
+    target.updated_at = now
+    db.flush()
+    return existing is None
+
+
+def close_stale_findings(db: Session, probe_id: int, before: datetime, reason: str) -> int:
+    """Aktive Hinweise schließen, die die Probe nicht mehr bestätigen kann (Dienst neu gestartet).
+    Besteht das Problem weiter, meldet die Probe es mit neuer finding_id erneut."""
+    now = utcnow()
+    rows = list(db.execute(select(WachtlFinding).where(
+        WachtlFinding.probe_id == probe_id, WachtlFinding.state == "active",
+        WachtlFinding.detected_at < before)).scalars())
+    for f in rows:
+        f.state = "resolved"
+        f.resolved_at = now
+        f.details_json = json.dumps({**json.loads(f.details_json or "{}"), "resolution": reason},
+                                    ensure_ascii=False, sort_keys=True)
+        f.updated_at = now
+    return len(rows)
+
+
+# --- Ausfallanalyse ---------------------------------------------------------
+def incidents(db: Session, since: datetime, until: datetime, site_id: int | None = None) -> list[dict]:
+    """Störungen mit Ursache je Standort aus den 1-min-Buckets (``wachtl_analysis.detect_incidents``)."""
+    q_sites = select(WachtlSite)
+    if site_id is not None:
+        q_sites = q_sites.where(WachtlSite.id == site_id)
+    sites = list(db.execute(q_sites).scalars())
+    checks = [c for c in db.execute(select(WachtlCheck)).scalars() if c.enabled]
+    probes = list(db.execute(select(WachtlProbe)).scalars())
+    out: list[dict] = []
+    for s in sites:
+        site_probes = [p.id for p in probes if p.site_id == s.id]
+        site_checks = {c.id: c.role for c in checks if c.site_id in (None, s.id)}
+        if not site_probes or not site_checks:
+            continue
+        rows = db.execute(
+            select(WachtlSample.probe_id, WachtlSample.check_id, WachtlSample.bucket_ts,
+                   WachtlSample.count, WachtlSample.loss)
+            .where(WachtlSample.probe_id.in_(site_probes), WachtlSample.step_s == BUCKET_S,
+                   WachtlSample.bucket_ts >= since, WachtlSample.bucket_ts < until)
+        ).all()
+        buckets = {(pid, cid, int(bts.timestamp())): (cnt, loss) for pid, cid, bts, cnt, loss in rows}
+        min_interval = min((c.interval_s for c in checks if c.id in site_checks), default=60)
+        for inc in wachtl_analysis.detect_incidents(
+            s.id, site_probes, site_checks, buckets,
+            threshold_pct=settings.wachtl_outage_loss_pct, min_interval_s=min_interval,
+        ):
+            inc["site_name"] = s.name
+            out.append(inc)
+    out.sort(key=lambda i: i["start"], reverse=True)
+    return out
+
+
+# --- Diagnose-Auslöser ------------------------------------------------------
+_diag_lock = threading.Lock()
+_diag_last: dict[int, float] = {}       # site_id → Zeitpunkt des letzten automatischen Laufs (monotonic)
+
+
+class DiagnoseBusy(RuntimeError):
+    pass
+
+
+def diagnose_targets(db: Session, probe: WachtlProbe) -> list[dict]:
+    """Ziele für einen Diagnose-Lauf von netprobe aus: Internet-Referenzen und Ziele des Standorts
+    (``gateway`` ist das Gateway des PCs und von hier nicht sinnvoll messbar) plus der PC selbst.
+
+    Für den PC zählt zuerst die LAN-Adresse aus dem Heartbeat (``last_ip`` kann die NAT-Adresse des
+    Standort-Routers sein), sonst ``last_ip``."""
+    targets: list[dict] = []
+    for c in checks_for_probe(db, probe):
+        if c.target != "gateway" and c.role != "gateway" and all(t["host"] != c.target for t in targets):
+            targets.append({"name": c.name, "host": c.target})
+    try:
+        reported = [str(a) for a in json.loads(probe.addresses_json or "[]")]
+    except (json.JSONDecodeError, TypeError):
+        reported = []
+    for candidate in [*reported, probe.last_ip or ""]:
+        try:
+            ip = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if not (ip.is_loopback or ip.is_link_local or ip.is_unspecified):
+            targets.insert(0, {"name": f"PC {probe.hostname}", "host": str(ip)})
+            break
+    return targets[: settings.diagnostics_max_targets]
+
+
+def start_diagnostics(probe_id: int, *, report_id: int | None = None, automatic: bool = False) -> None:
+    """Diagnose-Lauf im Hintergrund starten; bei ``report_id`` wird der Lauf an der Meldung vermerkt.
+
+    Automatische Läufe höchstens einmal je Standort und ``wachtl_diagnostics_cooldown_min``
+    (sonst ``DiagnoseBusy``). Der Lauf selbst geht über ``diagnostics_service.run_diagnostics``.
+    """
+    with session_scope() as db:
+        probe = db.get(WachtlProbe, probe_id)
+        if probe is None:
+            raise ValueError("Probe nicht gefunden")
+        site_id = probe.site_id
+        targets = diagnose_targets(db, probe)
+    if not targets:
+        raise ValueError("Keine Ziele für eine Diagnose – der Probe sind keine Checks zugewiesen")
+    cooldown_s = settings.wachtl_diagnostics_cooldown_min * 60
+    with _diag_lock:
+        last = _diag_last.get(site_id)
+        if automatic and last is not None and time.monotonic() - last < cooldown_s:
+            raise DiagnoseBusy("Für diesen Standort lief kürzlich schon eine Diagnose")
+        _diag_last[site_id] = time.monotonic()
+    threading.Thread(target=_diagnose_job, args=(probe_id, targets, report_id),
+                     name=f"wachtl-diagnose-{probe_id}", daemon=True).start()
+
+
+def _diagnose_job(probe_id: int, targets: list[dict], report_id: int | None) -> None:
+    from app.services import capture_service, diagnostics_service
+
+    try:
+        run = diagnostics_service.run_diagnostics(
+            targets=targets, tests={"ping": True, "mtu": True, "traceroute": True},
+            interface=capture_service.resolve_default_interface(), duration_s=10,
+        )
+    except Exception:  # noqa: BLE001 – Hintergrund-Thread: nur protokollieren
+        log.exception("Diagnose für Probe %s fehlgeschlagen", probe_id)
+        return
+    log.info("Diagnose %s für Probe %s fertig: %s", run.id, probe_id, run.overall_status)
+    if report_id is not None:
+        with session_scope() as db:
+            r = db.get(WachtlReport, report_id)
+            if r is not None:
+                r.diagnostic_run_id = run.id
+
+
+def prune_events() -> tuple[int, int]:
+    cutoff = utcnow() - timedelta(days=settings.wachtl_event_retention_days)
+    with session_scope() as db:
+        n_r = db.query(WachtlReport).filter(
+            WachtlReport.occurred_at < cutoff).delete(synchronize_session=False)
+        n_f = db.query(WachtlFinding).filter(
+            WachtlFinding.state == "resolved", WachtlFinding.resolved_at < cutoff
+        ).delete(synchronize_session=False)
+    return n_r, n_f
