@@ -39,6 +39,7 @@ from app.core.logging import get_logger, setup_logging
 from app.services.iperf_service import iperf3_server
 from app.services.long_capture import long_capture_manager
 from app.services.ping_manager import ping_manager
+from app.services.rtp_reflector import rtp_reflector
 from app.workers.scheduler import scheduler_service
 
 setup_logging()
@@ -53,10 +54,12 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     ping_manager.bind_loop(loop)
     long_capture_manager.bind_loop(loop)
+    rtp_reflector.bind_loop(loop)
     scheduler_service.start()
     ping_manager.resume_all()
     long_capture_manager.resume_all()
     iperf3_server.resume()
+    await rtp_reflector.resume()
     try:
         yield
     finally:
@@ -65,6 +68,7 @@ async def lifespan(app: FastAPI):
         await ping_manager.shutdown()
         await long_capture_manager.shutdown()
         await iperf3_server.shutdown()
+        await rtp_reflector.shutdown()
 
 
 app = FastAPI(

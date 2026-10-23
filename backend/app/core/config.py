@@ -206,8 +206,15 @@ class Settings(BaseSettings):
     # zu den Zielen des Standorts und zum PC); höchstens einer je Standort und Sperrzeit.
     wachtl_report_diagnostics: bool = True
     wachtl_diagnostics_cooldown_min: int = 10
-    # Aufbewahrung von Meldungen und behobenen Hinweisen
+    # Aufbewahrung von Meldungen, Ereignissen und behobenen Hinweisen
     wachtl_event_retention_days: int = 365
+    # RTP-Reflektor (Gegenstelle für Sprachtests, UDP); Startwert, zur Laufzeit im KV-Store.
+    wachtl_rtp_enabled: bool = True
+    wachtl_rtp_port: int = 5004
+    # Adresse von netprobe für iperf3-/Sprachtests der Probes; leer = Host aus der Anfrage der Probe.
+    wachtl_peer_host: str = ""
+    # Ergebnisse geplanter Messungen (Pfad, Bandbreite, Sprache)
+    wachtl_result_retention_days: int = 365
 
     # --- Login / Rate Limiting ---
     login_rate_max_attempts: int = 5

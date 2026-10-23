@@ -47,7 +47,7 @@ def test_parse_ingest_buckets_per_minute():
         f'wachtl_ping_jitter_ms{{check_id="2"}} 1.8 {NOW_MS + 50000}',
         f'wachtl_ping_up{{check_id="2"}} 1 {NOW_MS + 60000}',
     ])
-    res = parse_ingest(body, {2}, NOW_MS)
+    res = parse_ingest(body, {2: "ping"}, NOW_MS)
     assert res.rejected == 0
     assert res.accepted == 8
     first = res.buckets[(2, NOW_MS // 1000)]
@@ -62,7 +62,7 @@ def test_parse_ingest_rejects():
     body = "\n".join([
         "# Kommentar",
         f'wachtl_ping_up{{check_id="9"}} 1 {NOW_MS}',            # fremder Check
-        f'wachtl_hop_rtt_ms{{check_id="2",hop="1",hop_ip="10.0.0.1"}} 1 {NOW_MS}',  # Pfad: Phase 3
+        f'wachtl_hop_rtt_ms{{check_id="2",hop="1",hop_ip="10.0.0.1"}} 1 {NOW_MS}',  # Hop für Ping-Check
         f'evil_metric{{check_id="2"}} 1 {NOW_MS}',
         f'wachtl_ping_rtt_ms{{check_id="2"}} NaN {NOW_MS}',
         f'wachtl_ping_rtt_ms{{check_id="2"}} -1 {NOW_MS}',
@@ -70,13 +70,30 @@ def test_parse_ingest_rejects():
         f'wachtl_ping_up{{check_id="²"}} 1 {NOW_MS}',
         "kaputt",
     ])
-    res = parse_ingest(body, {2}, NOW_MS)
+    res = parse_ingest(body, {2: "ping"}, NOW_MS)
     assert res.accepted == 0
-    assert res.reasons == {"check_id": 2, "metric": 2, "value": 2, "timestamp": 1, "format": 1}
+    assert res.reasons == {"check_id": 2, "metric": 1, "hop": 1, "value": 2, "timestamp": 1, "format": 1}
+
+
+def test_parse_ingest_hops_for_path_checks():
+    body = "\n".join([
+        f'wachtl_hop_up{{check_id="5",hop="1",hop_ip="192.168.1.1"}} 1 {NOW_MS}',
+        f'wachtl_hop_rtt_ms{{check_id="5",hop="1",hop_ip="192.168.1.1"}} 0.8 {NOW_MS}',
+        f'wachtl_hop_up{{check_id="5",hop="2",hop_ip="62.155.1.1"}} 0 {NOW_MS}',
+        f'wachtl_hop_up{{check_id="5",hop="99",hop_ip="62.155.1.1"}} 1 {NOW_MS}',
+        f'wachtl_hop_up{{check_id="5",hop="3",hop_ip="kaputt"}} 1 {NOW_MS}',
+        f'wachtl_ping_up{{check_id="5"}} 1 {NOW_MS}',
+    ])
+    res = parse_ingest(body, {5: "path"}, NOW_MS)
+    assert res.reasons == {"hop": 2, "metric": 1}
+    minute = NOW_MS // 1000
+    assert res.hop_buckets[(5, 1, "192.168.1.1", minute)].rtt_n == 1
+    assert res.hop_buckets[(5, 2, "62.155.1.1", minute)].loss == 1
+    assert not res.buckets
 
 
 def test_parse_ingest_seconds_timestamp():
-    res = parse_ingest(f'wachtl_ping_up{{check_id="2"}} 1 {NOW_MS // 1000}', {2}, NOW_MS)
+    res = parse_ingest(f'wachtl_ping_up{{check_id="2"}} 1 {NOW_MS // 1000}', {2: "ping"}, NOW_MS)
     assert res.accepted == 1
 
 

@@ -1,5 +1,6 @@
 """Verwaltung der Wachtl-Clients (``/api/clients``): Standorte, Enrollment-Token, Checks, Probes,
-Standort-Matrix, Zeitreihen, Störungsmeldungen, Client-Hinweise, Ausfälle und Diagnose.
+Standort-Matrix, Zeitreihen, Störungsmeldungen, Client-Hinweise, Ausfälle, Diagnose, Pfad/Bandbreite/Sprache,
+Aufträge („Jetzt messen“) und Ereignisse.
 Die Probes selbst sprechen ``/api/probe/v1`` (``app.api.wachtl_probe``)."""
 
 from __future__ import annotations
@@ -20,23 +21,31 @@ from app.models.user import User
 from app.models.wachtl import (
     WachtlCheck,
     WachtlEnrollToken,
+    WachtlEvent,
     WachtlFinding,
+    WachtlPathRun,
     WachtlProbe,
     WachtlReport,
     WachtlSite,
 )
 from app.schemas.schemas import (
+    WachtlBandwidthRunOut,
     WachtlCheckCreate,
     WachtlCheckOut,
     WachtlCheckUpdate,
+    WachtlCommandOut,
     WachtlDiagnoseStarted,
+    WachtlEventOut,
     WachtlFindingOut,
     WachtlIncidentOut,
     WachtlOverview,
+    WachtlPathRunOut,
+    WachtlPathView,
     WachtlProbeOut,
     WachtlProbeUpdate,
     WachtlReportOut,
     WachtlReportStatusUpdate,
+    WachtlRtpRunOut,
     WachtlSeriesPoint,
     WachtlSettingsOut,
     WachtlSettingsUpdate,
@@ -46,37 +55,78 @@ from app.schemas.schemas import (
     WachtlTokenCreated,
     WachtlTokenOut,
 )
-from app.services import audit, kvstore, wachtl_events, wachtl_service
+from app.services import audit, kvstore, wachtl_events, wachtl_measure, wachtl_service
+from app.services import wachtl_checktypes as ct
 from app.services.proc import validate_network_target
 
 router = APIRouter(prefix="/api/clients", tags=["clients"])
 
 
 # --- Einstellungen ----------------------------------------------------------
-def _settings_out(db: Session) -> WachtlSettingsOut:
+def _rtp_wanted(db: Session) -> tuple[bool, int]:
+    from app.services import rtp_reflector as rr
+
+    return (bool(kvstore.get_value(db, rr.KV_ENABLED, settings.wachtl_rtp_enabled)),
+            int(kvstore.get_value(db, rr.KV_PORT, settings.wachtl_rtp_port)))
+
+
+def _settings_out(db: Session, request: Request) -> WachtlSettingsOut:
+    from app.services.iperf_service import iperf3_server
+    from app.services.rtp_reflector import rtp_reflector
+
     pin, pin_error = wachtl_service.tls_pin()
+    rtp_enabled, rtp_port = _rtp_wanted(db)
     return WachtlSettingsOut(
         enabled=wachtl_service.is_enabled(db),
         pin=pin,
         pin_error=pin_error,
         server_urls=settings.wachtl_server_url_list,
         min_interval_s=settings.wachtl_min_interval_s,
+        rtp_enabled=rtp_enabled,
+        rtp_port=rtp_port,
+        rtp_running=rtp_reflector.running,
+        rtp_error=rtp_reflector.error,
+        iperf_running=iperf3_server.is_running(),
+        iperf_port=iperf3_server.port,
+        peer_host=wachtl_measure.peer_host(request.url.hostname),
     )
 
 
 @router.get("/settings", response_model=WachtlSettingsOut)
-def get_settings(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> WachtlSettingsOut:
-    return _settings_out(db)
+def get_settings(request: Request, db: Session = Depends(get_db),
+                 _: User = Depends(get_current_user)) -> WachtlSettingsOut:
+    return _settings_out(db, request)
 
 
 @router.put("/settings", response_model=WachtlSettingsOut)
 def update_settings(payload: WachtlSettingsUpdate, request: Request, db: Session = Depends(get_db),
                     user: User = Depends(require_admin)) -> WachtlSettingsOut:
-    kvstore.set_value(db, wachtl_service.KV_ENABLED, payload.enabled)
-    audit.record(db, "wachtl_enable" if payload.enabled else "wachtl_disable", user_id=user.id,
-                 username=user.username, ip=client_ip(request))
+    from app.services import rtp_reflector as rr
+
+    if payload.enabled is not None:
+        kvstore.set_value(db, wachtl_service.KV_ENABLED, payload.enabled)
+        audit.record(db, "wachtl_enable" if payload.enabled else "wachtl_disable", user_id=user.id,
+                     username=user.username, ip=client_ip(request))
+    if payload.rtp_enabled is not None:
+        kvstore.set_value(db, rr.KV_ENABLED, payload.rtp_enabled)
+    if payload.rtp_port is not None:
+        kvstore.set_value(db, rr.KV_PORT, payload.rtp_port)
+    if payload.rtp_enabled is not None or payload.rtp_port is not None:
+        audit.record(db, "wachtl_rtp_settings", user_id=user.id, username=user.username,
+                     detail=f"enabled={payload.rtp_enabled} port={payload.rtp_port}", ip=client_ip(request))
     db.commit()
-    return _settings_out(db)
+    rtp_enabled, rtp_port = _rtp_wanted(db)
+    try:
+        rr.rtp_reflector.apply(wachtl_service.is_enabled(db) and rtp_enabled, rtp_port)
+    except Exception as exc:  # noqa: BLE001 – Einstellung ist gespeichert, Zustand steht in rtp_error
+        rr.rtp_reflector.error = str(exc)
+    return _settings_out(db, request)
+
+
+@router.get("/check-types")
+def check_types(_: User = Depends(get_current_user)) -> list[dict]:
+    """Check-Typen mit ihren Feldern – Grundlage des Formulars im UI."""
+    return ct.describe()
 
 
 @router.get("/overview", response_model=WachtlOverview)
@@ -160,59 +210,86 @@ def revoke_token(token_id: int, request: Request, db: Session = Depends(get_db),
 
 
 # --- Checks -----------------------------------------------------------------
-def _validate_check(db: Session, target: str | None, interval_s: int | None, site_id: int | None) -> None:
-    if target is not None and target != "gateway":
-        try:
-            validate_network_target(target)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                "Ungültiges Ziel – IP-Adresse, Hostname oder 'gateway'") from exc
-    if interval_s is not None and interval_s < settings.wachtl_min_interval_s:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            f"Intervall mindestens {settings.wachtl_min_interval_s} s")
-    if site_id is not None and db.get(WachtlSite, site_id) is None:
+def _check_out(c: WachtlCheck) -> WachtlCheckOut:
+    params = wachtl_measure.params_of(c)
+    return WachtlCheckOut(
+        id=c.id, name=c.name, type=c.type, target=c.target, role=c.role, interval_s=c.interval_s,
+        timeout_ms=c.timeout_ms, site_id=c.site_id, enabled=c.enabled, created_at=c.created_at, params=params,
+        summary=ct.summary(c.type, c.interval_s, params),
+    )
+
+
+def _apply_check(db: Session, check: WachtlCheck, data: dict) -> None:
+    """Werte prüfen und übernehmen. Ping/Pfad: Ziel + Intervall; geplante Messungen: Ziel aus den
+    Parametern."""
+    ctype = check.type
+    if data.get("site_id") is not None and db.get(WachtlSite, data["site_id"]) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Standort nicht gefunden")
+    for key in ("name", "role", "site_id", "enabled"):
+        if key in data and (data[key] is not None or key == "site_id"):
+            setattr(check, key, data[key])
+    probe_names = {p.id: p.hostname for p in db.execute(select(WachtlProbe)).scalars()}
+    raw_params = data["params"] if data.get("params") is not None else wachtl_measure.params_of(check)
+    try:
+        params = ct.parse_params(ctype, raw_params, probe_ids=set(probe_names))
+    except ct.ParamError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    check.params_json = json.dumps(params)
+    if ct.TYPES[ctype].uses_target:
+        target = (data.get("target") or check.target or "").strip()
+        if not target:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Ziel fehlt")
+        if target != "gateway" or ctype != "ping":
+            try:
+                validate_network_target(target)
+            except ValueError as exc:
+                hint = ("IP-Adresse, Hostname oder 'gateway'" if ctype == "ping"
+                        else "IP-Adresse oder Hostname")
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Ungültiges Ziel – {hint}") from exc
+        check.target = target
+        interval = data.get("interval_s") or check.interval_s or settings.wachtl_min_interval_s
+        if interval < settings.wachtl_min_interval_s:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                f"Intervall mindestens {settings.wachtl_min_interval_s} s")
+        check.interval_s = interval
+        check.timeout_ms = data.get("timeout_ms") or check.timeout_ms or 1000
+    else:
+        check.target = ct.target_for(ctype, params, probe_names)
+        check.interval_s = ct.SCHEDULED_INTERVAL_S
+        check.timeout_ms = ct.timeout_ms(ctype, params)
 
 
 @router.get("/checks", response_model=list[WachtlCheckOut])
-def list_checks(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> list[WachtlCheck]:
-    return list(db.execute(select(WachtlCheck).order_by(WachtlCheck.id)).scalars())
+def list_checks(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> list[WachtlCheckOut]:
+    return [_check_out(c) for c in db.execute(select(WachtlCheck).order_by(WachtlCheck.id)).scalars()]
 
 
 @router.post("/checks", response_model=WachtlCheckOut, status_code=status.HTTP_201_CREATED)
 def create_check(payload: WachtlCheckCreate, request: Request, db: Session = Depends(get_db),
-                 user: User = Depends(require_admin)) -> WachtlCheck:
-    data = payload.model_dump()
-    data["target"] = data["target"].strip()
-    _validate_check(db, data["target"], data["interval_s"], data["site_id"])
-    check = WachtlCheck(type="ping", params_json=json.dumps({}), **data)
+                 user: User = Depends(require_admin)) -> WachtlCheckOut:
+    check = WachtlCheck(type=payload.type, target="", interval_s=payload.interval_s,
+                        timeout_ms=payload.timeout_ms)
+    _apply_check(db, check, payload.model_dump())
     db.add(check)
     audit.record(db, "wachtl_check_create", user_id=user.id, username=user.username,
-                 detail=f"{check.name} → {check.target}", ip=client_ip(request))
+                 detail=f"{check.type} {check.name} → {check.target}", ip=client_ip(request))
     db.commit()
     db.refresh(check)
-    return check
+    return _check_out(check)
 
 
 @router.patch("/checks/{check_id}", response_model=WachtlCheckOut)
 def update_check(check_id: int, payload: WachtlCheckUpdate, request: Request, db: Session = Depends(get_db),
-                 user: User = Depends(require_admin)) -> WachtlCheck:
+                 user: User = Depends(require_admin)) -> WachtlCheckOut:
     check = db.get(WachtlCheck, check_id)
     if check is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Check nicht gefunden")
-    changes = payload.model_dump(exclude_unset=True)
-    if "target" in changes and changes["target"] is not None:
-        changes["target"] = changes["target"].strip()
-    _validate_check(db, changes.get("target"), changes.get("interval_s"), changes.get("site_id"))
-    for k, v in changes.items():
-        if v is None and k != "site_id":
-            continue
-        setattr(check, k, v)
+    _apply_check(db, check, payload.model_dump(exclude_unset=True))
     audit.record(db, "wachtl_check_update", user_id=user.id, username=user.username, detail=str(check_id),
                  ip=client_ip(request))
     db.commit()
     db.refresh(check)
-    return check
+    return _check_out(check)
 
 
 @router.delete("/checks/{check_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -237,7 +314,7 @@ def _probe_out(p: WachtlProbe, site_names: dict[int, str]) -> WachtlProbeOut:
         id=p.id, site_id=p.site_id, site_name=site_names.get(p.site_id, ""), hostname=p.hostname, os=p.os,
         version=p.version, status=p.status, online=wachtl_service.probe_online(p), created_at=p.created_at,
         last_seen=p.last_seen, last_ip=p.last_ip, buffer_items=p.buffer_items, uptime_s=p.uptime_s,
-        addresses=addresses, deregistered_at=p.deregistered_at,
+        addresses=addresses, deregistered_at=p.deregistered_at, peer_enabled=p.peer_enabled,
     )
 
 
@@ -270,10 +347,15 @@ def update_probe(probe_id: int, payload: WachtlProbeUpdate, request: Request, db
     if payload.status == "active" and p.deregistered_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Probe wurde deinstalliert – zum Reaktivieren neu installieren")
-    p.status = payload.status
-    audit.record(db, "wachtl_probe_enable" if payload.status == "active" else "wachtl_probe_disable",
-                 user_id=user.id, username=user.username, detail=f"{p.id} {p.hostname}",
-                 ip=client_ip(request))
+    if payload.status is not None:
+        p.status = payload.status
+        audit.record(db, "wachtl_probe_enable" if payload.status == "active" else "wachtl_probe_disable",
+                     user_id=user.id, username=user.username, detail=f"{p.id} {p.hostname}",
+                     ip=client_ip(request))
+    if payload.peer_enabled is not None:
+        p.peer_enabled = payload.peer_enabled
+        audit.record(db, "wachtl_probe_peer", user_id=user.id, username=user.username,
+                     detail=f"{p.id} {p.hostname} Gegenstelle={payload.peer_enabled}", ip=client_ip(request))
     db.commit()
     db.refresh(p)
     return _probe_out(p, _site_names(db))
@@ -473,3 +555,95 @@ def diagnose_report(report_id: int, request: Request, db: Session = Depends(get_
                  detail=f"Meldung {report_id}", ip=client_ip(request))
     db.commit()
     return out
+
+
+# --- Pfad, Bandbreite, Sprache ---------------------------------------------
+def _probe_check(db: Session, probe_id: int, check_id: int,
+                 types: tuple[str, ...]) -> tuple[WachtlProbe, WachtlCheck]:
+    probe = db.get(WachtlProbe, probe_id)
+    check = db.get(WachtlCheck, check_id)
+    if probe is None or check is None or check.type not in types:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Probe oder Check nicht gefunden")
+    return probe, check
+
+
+def _path_out(r: WachtlPathRun) -> WachtlPathRunOut:
+    return WachtlPathRunOut(id=r.id, first_ts=r.first_ts, ts=r.ts, reason=r.reason, reached=r.reached,
+                            changed=r.changed, hops=json.loads(r.hops_json))
+
+
+@router.get("/probes/{probe_id}/checks/{check_id}/path", response_model=WachtlPathView)
+def probe_path(probe_id: int, check_id: int, range: str = "1h", start: str | None = None,
+               end: str | None = None, db: Session = Depends(get_db),
+               _: User = Depends(get_current_user)) -> WachtlPathView:
+    """Aktueller Pfad, Pfadwechsel und MTR-Tabelle (Hop-Pings im Zeitraum, bewertet)."""
+    _probe_check(db, probe_id, check_id, ("path",))
+    since, until = resolve_range(range, start, end, default="1h")
+    until = until or utcnow()
+    runs = wachtl_measure.path_runs(db, probe_id, check_id)
+    return WachtlPathView(
+        current=_path_out(runs[0]) if runs else None,
+        history=[_path_out(r) for r in runs if r.changed or r is runs[-1]],
+        hops=wachtl_measure.hop_table(db, probe_id, check_id, since or until - timedelta(hours=1), until),
+    )
+
+
+@router.get("/probes/{probe_id}/checks/{check_id}/bandwidth", response_model=list[WachtlBandwidthRunOut])
+def probe_bandwidth(probe_id: int, check_id: int, range: str = "30d", start: str | None = None,
+                    end: str | None = None, db: Session = Depends(get_db),
+                    _: User = Depends(get_current_user)) -> list:
+    _probe_check(db, probe_id, check_id, ct.BANDWIDTH_TYPES)
+    since, until = resolve_range(range, start, end, default="30d")
+    return wachtl_measure.bandwidth_runs(db, probe_id, check_id, since, until)
+
+
+@router.get("/probes/{probe_id}/checks/{check_id}/rtp", response_model=list[WachtlRtpRunOut])
+def probe_rtp(probe_id: int, check_id: int, range: str = "30d", start: str | None = None,
+              end: str | None = None, db: Session = Depends(get_db),
+              _: User = Depends(get_current_user)) -> list:
+    _probe_check(db, probe_id, check_id, ("rtp",))
+    since, until = resolve_range(range, start, end, default="30d")
+    return wachtl_measure.rtp_runs(db, probe_id, check_id, since, until)
+
+
+@router.post("/probes/{probe_id}/checks/{check_id}/run", response_model=WachtlCommandOut,
+             status_code=status.HTTP_202_ACCEPTED)
+def run_check_now(probe_id: int, check_id: int, request: Request, db: Session = Depends(get_db),
+                  user: User = Depends(require_admin)) -> WachtlCommandOut:
+    """„Jetzt messen“ (Bandbreite/Sprache) bzw. „Pfad neu ermitteln“ – geht mit dem nächsten Heartbeat
+    (höchstens ``wachtl_heartbeat_interval_s``) an die Probe."""
+    probe, check = _probe_check(db, probe_id, check_id, ("path", *ct.SCHEDULED_TYPES))
+    if probe.status != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Probe ist deaktiviert")
+    ctype = "retrace" if check.type == "path" else "run_check"
+    cmd = wachtl_measure.queue_command(db, probe.id, ctype, check.id, user.username)
+    audit.record(db, "wachtl_command", user_id=user.id, username=user.username,
+                 detail=f"{ctype} Probe {probe.id} Check {check.id}", ip=client_ip(request))
+    db.commit()
+    return WachtlCommandOut(id=cmd.id, type=cmd.type, check_id=cmd.check_id)
+
+
+# --- Ereignisse -------------------------------------------------------------
+@router.get("/events", response_model=list[WachtlEventOut])
+def list_events(range: str = "7d", start: str | None = None, end: str | None = None,
+                site_id: int | None = None, probe_id: int | None = None, db: Session = Depends(get_db),
+                _: User = Depends(get_current_user)) -> list[WachtlEventOut]:
+    """Einzelereignisse (Pfadwechsel, Bandbreite/MOS unter Schwellwert, Messfehler)."""
+    since, until = resolve_range(range, start, end, default="7d")
+    q = select(WachtlEvent)
+    if since is not None:
+        q = q.where(WachtlEvent.ts >= since)
+    if until is not None:
+        q = q.where(WachtlEvent.ts <= until)
+    if site_id is not None:
+        q = q.where(WachtlEvent.site_id == site_id)
+    if probe_id is not None:
+        q = q.where(WachtlEvent.probe_id == probe_id)
+    hosts, sites = _probe_hosts(db), _site_names(db)
+    return [
+        WachtlEventOut(id=e.id, ts=e.ts, site_id=e.site_id, site_name=sites.get(e.site_id, ""),
+                       probe_id=e.probe_id, probe_hostname=hosts.get(e.probe_id) if e.probe_id else None,
+                       check_id=e.check_id, kind=e.kind, severity=e.severity, title=e.title, detail=e.detail,
+                       notified_at=e.notified_at)
+        for e in db.execute(q.order_by(WachtlEvent.ts.desc()).limit(1000)).scalars()
+    ]

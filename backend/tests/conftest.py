@@ -17,6 +17,8 @@ os.environ.setdefault("NETPROBE_CAPTURE_DIR", str(_TMP / "captures"))
 os.environ.setdefault("NETPROBE_LOG_DIR", str(_TMP / "logs"))
 os.environ.setdefault("NETPROBE_FRONTEND_DIST", str(_TMP / "dist"))
 os.environ.setdefault("NETPROBE_SECRET_KEY", "test-secret-key")
+# Kein UDP-Port für den RTP-Reflektor in Tests (Tests starten ihn bei Bedarf selbst).
+os.environ.setdefault("NETPROBE_WACHTL_RTP_ENABLED", "false")
 
 
 @pytest.fixture(scope="session", autouse=True)

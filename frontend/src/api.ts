@@ -788,6 +788,13 @@ export interface WachtlSettings {
   pin_error: string | null;
   server_urls: string[];
   min_interval_s: number;
+  rtp_enabled: boolean;
+  rtp_port: number;
+  rtp_running: boolean;
+  rtp_error: string | null;
+  iperf_running: boolean;
+  iperf_port: number;
+  peer_host: string;
 }
 
 export interface WachtlSite {
@@ -815,11 +822,36 @@ export interface WachtlTokenCreated extends WachtlToken {
 }
 
 export type WachtlRole = "target" | "gateway" | "reference";
+export type WachtlCheckTypeKey = "ping" | "path" | "iperf" | "speedtest" | "rtp";
+
+// Feldbeschreibung aus /api/clients/check-types (Backend: app/services/wachtl_checktypes.py)
+export interface WachtlField {
+  key: string;
+  label: string;
+  kind: "int" | "float" | "bool" | "choice" | "text" | "time" | "url" | "host";
+  default: string | number | boolean;
+  min: number | null;
+  max: number | null;
+  choices: [string, string][];
+  help: string;
+  unit: string;
+  show_if: [string, string[]] | null;
+  group: string;
+}
+
+export interface WachtlCheckType {
+  key: WachtlCheckTypeKey;
+  label: string;
+  description: string;
+  uses_target: boolean;
+  uses_interval: boolean;
+  fields: WachtlField[];
+}
 
 export interface WachtlCheck {
   id: number;
   name: string;
-  type: string;
+  type: WachtlCheckTypeKey;
   target: string;
   role: WachtlRole;
   interval_s: number;
@@ -827,6 +859,8 @@ export interface WachtlCheck {
   site_id: number | null;
   enabled: boolean;
   created_at: string;
+  params: Record<string, string | number | boolean>;
+  summary: string;
 }
 
 export interface WachtlProbe {
@@ -845,6 +879,7 @@ export interface WachtlProbe {
   uptime_s: number;
   addresses: string[];
   deregistered_at: string | null;
+  peer_enabled: boolean;
 }
 
 export interface WachtlSeriesPoint extends PingSeriesPoint {
@@ -860,6 +895,7 @@ export interface WachtlCell {
   rtt_avg: number | null;
   jitter_ms: number | null;
   count: number;
+  text: string | null;
 }
 
 export interface WachtlOverview {
@@ -867,7 +903,7 @@ export interface WachtlOverview {
   sites: {
     site_id: number;
     name: string;
-    checks: { id: number; name: string; target: string; role: WachtlRole }[];
+    checks: { id: number; name: string; target: string; role: WachtlRole; type: WachtlCheckTypeKey }[];
     probes: {
       probe_id: number;
       hostname: string;
@@ -943,4 +979,105 @@ export interface WachtlIncident {
 export interface WachtlDiagnoseStarted {
   started: boolean;
   targets: string[];
+}
+
+export interface WachtlPathHop {
+  hop: number;
+  ip: string | null;
+  rtt_ms: number | null;
+  stale?: boolean;
+}
+
+export interface WachtlPathRun {
+  id: number;
+  first_ts: string;
+  ts: string;
+  reason: string | null;
+  reached: boolean;
+  changed: boolean;
+  hops: WachtlPathHop[];
+}
+
+export interface WachtlHopRow {
+  hop: number;
+  ip: string;
+  alt_ips: string[];
+  count: number;
+  loss: number;
+  loss_pct: number | null;
+  rtt_avg: number | null;
+  rtt_min: number | null;
+  rtt_max: number | null;
+  jitter_ms: number | null;
+  verdict: "ok" | "no_data" | "icmp_limit" | "loss" | "loss_continues" | "latency";
+  verdict_label: string;
+}
+
+export interface WachtlPathView {
+  current: WachtlPathRun | null;
+  history: WachtlPathRun[];
+  hops: WachtlHopRow[];
+}
+
+export interface WachtlBandwidthRun {
+  id: number;
+  ts: string;
+  kind: string;
+  direction: "up" | "down";
+  peer: string | null;
+  protocol: string | null;
+  mbps: number | null;
+  jitter_ms: number | null;
+  loss_pct: number | null;
+  retransmits: number | null;
+  latency_ms: number | null;
+  duration_s: number | null;
+  trigger: "schedule" | "manual";
+  error: string | null;
+}
+
+export interface WachtlRtpRun {
+  id: number;
+  ts: string;
+  peer: string | null;
+  codec: string | null;
+  ptime_ms: number | null;
+  duration_s: number | null;
+  mode: "wachtl" | "echo" | null;
+  sent: number | null;
+  received: number | null;
+  rtt_ms: number | null;
+  rtt_max_ms: number | null;
+  loss_pct: number | null;
+  up_loss_pct: number | null;
+  down_loss_pct: number | null;
+  jitter_ms: number | null;
+  up_jitter_ms: number | null;
+  down_jitter_ms: number | null;
+  out_of_order: number | null;
+  r_factor: number | null;
+  mos: number | null;
+  trigger: "schedule" | "manual";
+  error: string | null;
+}
+
+export interface WachtlEvent {
+  id: number;
+  ts: string;
+  site_id: number;
+  site_name: string;
+  probe_id: number | null;
+  probe_hostname: string | null;
+  check_id: number | null;
+  kind: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string | null;
+  notified_at: string | null;
+}
+
+export interface WachtlCommand {
+  id: number;
+  type: "run_check" | "retrace";
+  check_id: number | null;
 }

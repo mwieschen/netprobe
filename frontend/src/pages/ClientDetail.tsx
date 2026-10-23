@@ -3,18 +3,23 @@ import { Link, useParams } from "react-router-dom";
 import {
   api,
   ApiError,
+  WachtlBandwidthRun,
   WachtlCheck,
   WachtlDiagnoseStarted,
+  WachtlEvent,
   WachtlFinding,
   WachtlIncident,
+  WachtlPathView,
   WachtlProbe,
   WachtlReport,
+  WachtlRtpRun,
   WachtlSeriesPoint,
 } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
 import { ErrorBox } from "../components/common";
 import { FindingList, IncidentTable, ReportTable } from "../components/WachtlEvents";
+import { BandwidthPanel, EventList, PathPanel, RtpPanel, RunNowButton } from "../components/WachtlChecks";
 import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -40,10 +45,15 @@ export default function ClientDetailPage() {
   const [reports, setReports] = useState<WachtlReport[]>([]);
   const [findings, setFindings] = useState<WachtlFinding[]>([]);
   const [incidents, setIncidents] = useState<WachtlIncident[]>([]);
+  const [events, setEvents] = useState<WachtlEvent[]>([]);
+  const [pathView, setPathView] = useState<WachtlPathView | null>(null);
+  const [bwRuns, setBwRuns] = useState<WachtlBandwidthRun[]>([]);
+  const [rtpRuns, setRtpRuns] = useState<WachtlRtpRun[]>([]);
 
   function loadEvents() {
     api.get<WachtlReport[]>(`/api/clients/reports?probe_id=${id}&range=90d`).then(setReports).catch(() => setReports([]));
     api.get<WachtlFinding[]>(`/api/clients/findings?probe_id=${id}&days=30`).then(setFindings).catch(() => setFindings([]));
+    api.get<WachtlEvent[]>(`/api/clients/events?probe_id=${id}&range=30d`).then(setEvents).catch(() => setEvents([]));
   }
   useEffect(loadEvents, [id]);
   useEffect(() => {
@@ -74,11 +84,21 @@ export default function ClientDetailPage() {
     }).catch(() => setError("Probe nicht gefunden"));
   }, [id]);
 
+  const check = checks.find((c) => c.id === selected) ?? null;
   useEffect(() => {
-    if (selected === null) return;
-    api.get<WachtlSeriesPoint[]>(`/api/clients/probes/${id}/checks/${selected}/series?${windowQuery(win)}`)
-      .then(setPoints).catch(() => setPoints([]));
-  }, [id, selected, win]);
+    if (!check) return;
+    const base = `/api/clients/probes/${id}/checks/${check.id}`;
+    const q = windowQuery(win);
+    if (check.type === "ping") {
+      api.get<WachtlSeriesPoint[]>(`${base}/series?${q}`).then(setPoints).catch(() => setPoints([]));
+    } else if (check.type === "path") {
+      api.get<WachtlPathView>(`${base}/path?${q}`).then(setPathView).catch(() => setPathView(null));
+    } else if (check.type === "rtp") {
+      api.get<WachtlRtpRun[]>(`${base}/rtp?${q}`).then(setRtpRuns).catch(() => setRtpRuns([]));
+    } else {
+      api.get<WachtlBandwidthRun[]>(`${base}/bandwidth?${q}`).then(setBwRuns).catch(() => setBwRuns([]));
+    }
+  }, [id, check, win]);
 
   // Kennzahlen über den gewählten Zeitraum aus den (gebündelten) Punkten
   const count = points.reduce((a, p) => a + p.count, 0);
@@ -137,12 +157,20 @@ export default function ClientDetailPage() {
           <select value={selected ?? ""} onChange={(e) => setSelected(+e.target.value)}>
             {checks.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.target})</option>)}
           </select>
+          {check && <span className="muted" style={{ fontSize: 13 }}>{check.summary}</span>}
+          {isAdmin && probe && check && check.type !== "ping" && (
+            <RunNowButton probeId={probe.id} check={check} onInfo={setInfo} setError={setError} />
+          )}
         </div>
         <TimeRangePicker value={win} onChange={setWin} presets={PRESETS} />
       </div>
       {!checks.length && <p className="muted">Dieser Probe sind keine Checks zugewiesen.</p>}
 
-      {selected !== null && (
+      {check?.type === "path" && <PathPanel view={pathView} />}
+      {(check?.type === "iperf" || check?.type === "speedtest") && <BandwidthPanel runs={bwRuns} bounds={bounds} />}
+      {check?.type === "rtp" && <RtpPanel runs={rtpRuns} bounds={bounds} />}
+
+      {check?.type === "ping" && (
         <>
           <div className="grid cols-4" style={{ marginBottom: 16 }}>
             <div className="card stat"><div className="label">RTT min</div><div className="value">{fmtNum(rttMins.length ? Math.min(...rttMins) : null, 1, "ms")}</div></div>
@@ -194,6 +222,10 @@ export default function ClientDetailPage() {
       <div className="card" style={{ marginTop: 16 }}>
         <h2>Client-Hinweise (30 Tage)</h2>
         <FindingList findings={findings} showProbe={false} />
+      </div>
+      <div className="card" style={{ marginTop: 16 }}>
+        <h2>Ereignisse (30 Tage)</h2>
+        <EventList events={events} showProbe={false} />
       </div>
     </div>
   );
