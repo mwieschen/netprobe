@@ -5,8 +5,11 @@ import {
   ApiError,
   WachtlCell,
   WachtlCheck,
+  WachtlFinding,
+  WachtlIncident,
   WachtlOverview,
   WachtlProbe,
+  WachtlReport,
   WachtlRole,
   WachtlSettings,
   WachtlSite,
@@ -15,6 +18,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import { ErrorBox, Modal } from "../components/common";
+import { FindingList, IncidentTable, ReportTable } from "../components/WachtlEvents";
 import { fmtDateTime, fmtNum } from "../util";
 
 const ROLE_LABEL: Record<WachtlRole, string> = { target: "Ziel", gateway: "Gateway", reference: "Internet-Referenz" };
@@ -37,7 +41,21 @@ export default function ClientsPage() {
   const [tokens, setTokens] = useState<WachtlToken[]>([]);
   const [created, setCreated] = useState<WachtlTokenCreated | null>(null);
   const [modal, setModal] = useState<"site" | "check" | "token" | null>(null);
+  const [incidents, setIncidents] = useState<WachtlIncident[]>([]);
+  const [incRange, setIncRange] = useState("24h");
+  const [reports, setReports] = useState<WachtlReport[]>([]);
+  const [reportFilter, setReportFilter] = useState<"open" | "all">("open");
+  const [findings, setFindings] = useState<WachtlFinding[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  function loadEvents() {
+    api.get<WachtlIncident[]>(`/api/clients/incidents?range=${incRange}`).then(setIncidents).catch(() => setIncidents([]));
+    api.get<WachtlReport[]>(`/api/clients/reports?status=${reportFilter}&range=30d`).then(setReports).catch(() => setReports([]));
+    api.get<WachtlFinding[]>("/api/clients/findings?days=1").then((f) => setFindings(f.filter((x) => x.state === "active")))
+      .catch(() => setFindings([]));
+  }
+  useEffect(loadEvents, [incRange, reportFilter]);
 
   function load() {
     api.get<WachtlSettings>("/api/clients/settings").then(setCfg).catch(() => setCfg(null));
@@ -51,9 +69,11 @@ export default function ClientsPage() {
   useEffect(() => {
     const t = setInterval(() => {
       api.get<WachtlOverview>("/api/clients/overview").then(setOverview).catch(() => undefined);
+      loadEvents();
     }, 30000);
     return () => clearInterval(t);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incRange, reportFilter]);
 
   async function run(fn: () => Promise<unknown>, confirmText?: string) {
     if (confirmText && !confirm(confirmText)) return;
@@ -84,6 +104,7 @@ export default function ClientsPage() {
         )}
       </div>
       <ErrorBox error={error} />
+      {info && <div className="info-box" onClick={() => setInfo(null)}>{info}</div>}
       {cfg && !cfg.enabled && (
         <div className="card" style={{ marginBottom: 16 }}>
           <p className="muted" style={{ margin: 0 }}>
@@ -134,6 +155,38 @@ export default function ClientsPage() {
       {overview && !overview.sites.length && (
         <div className="card" style={{ marginBottom: 16 }}>
           <p className="muted" style={{ margin: 0 }}>Noch kein Standort angelegt.</p>
+        </div>
+      )}
+
+      {/* Störungen mit Ursache */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="topbar" style={{ marginBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>Störungen</h2>
+          <select value={incRange} onChange={(e) => setIncRange(e.target.value)} style={{ width: 170 }}>
+            <option value="6h">letzte 6 Stunden</option>
+            <option value="24h">letzte 24 Stunden</option>
+            <option value="7d">letzte 7 Tage</option>
+          </select>
+        </div>
+        <IncidentTable incidents={incidents} />
+      </div>
+
+      {/* Störungsmeldungen der Benutzer */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="topbar" style={{ marginBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>Störungsmeldungen</h2>
+          <select value={reportFilter} onChange={(e) => setReportFilter(e.target.value as "open" | "all")} style={{ width: 170 }}>
+            <option value="open">offene</option>
+            <option value="all">alle (30 Tage)</option>
+          </select>
+        </div>
+        <ReportTable reports={reports} isAdmin={isAdmin} onChanged={loadEvents} setError={setError} onInfo={setInfo} />
+      </div>
+
+      {findings.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h2>Aktive Client-Hinweise</h2>
+          <FindingList findings={findings} />
         </div>
       )}
 

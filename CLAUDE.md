@@ -289,7 +289,12 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   stored. Admin API `/api/clients` (sites, tokens shown once, checks with `wachtl_min_interval_s` floor,
   probes), pages `Clients.tsx`/`ClientDetail.tsx`. Probes need HTTPS: `install.sh` `setup_tls` creates a
   one-time key + self-signed cert in `/etc/netprobe/tls/` (key never rotated → stable pin) and nginx
-  listens on 443. Phases 2–4 (report/findings, path/bandwidth/rtp, alerting): `docs/wachtl-zentrale.md`.
+  listens on 443. Phase 2: `/report` + `/findings` (pure validation in `wachtl_events.py`, Wachtl's texts),
+  `WachtlReport`/`WachtlFinding`; outage analysis is the pure `wachtl_analysis.detect_incidents()` (per probe
+  and minute: lan/wan/target/probe-gap; all ≥2 probes of a site same cause → one site incident; minutes merged
+  into episodes with ≤2 clean minutes in between, dominant cause wins) — computed on request, not stored. A new
+  report starts `wachtl_service.start_diagnostics()` in a daemon thread (reuses `diagnostics_service`
+  ping/mtu/traceroute, per-site cooldown, run id stored on the report). Phases 3–4: `docs/wachtl-zentrale.md`.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
   host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
   inputs. `iperf3` is added to the installer's apt list; the optional

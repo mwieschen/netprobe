@@ -1,29 +1,42 @@
 """Verwaltung der Wachtl-Clients (``/api/clients``): Standorte, Enrollment-Token, Checks, Probes,
-Standort-Matrix und Zeitreihen. Die Probes selbst sprechen ``/api/probe/v1`` (``app.api.wachtl_probe``)."""
+Standort-Matrix, Zeitreihen, Störungsmeldungen, Client-Hinweise, Ausfälle und Diagnose.
+Die Probes selbst sprechen ``/api/probe/v1`` (``app.api.wachtl_probe``)."""
 
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, get_current_user, require_admin
 from app.api.timerange import resolve_range
 from app.core.config import settings
 from app.core.timeutils import utcnow
-from app.db.session import get_db
+from app.db.session import get_db, session_scope
 from app.models.user import User
-from app.models.wachtl import WachtlCheck, WachtlEnrollToken, WachtlProbe, WachtlSite
+from app.models.wachtl import (
+    WachtlCheck,
+    WachtlEnrollToken,
+    WachtlFinding,
+    WachtlProbe,
+    WachtlReport,
+    WachtlSite,
+)
 from app.schemas.schemas import (
     WachtlCheckCreate,
     WachtlCheckOut,
     WachtlCheckUpdate,
+    WachtlDiagnoseStarted,
+    WachtlFindingOut,
+    WachtlIncidentOut,
     WachtlOverview,
     WachtlProbeOut,
     WachtlProbeUpdate,
+    WachtlReportOut,
+    WachtlReportStatusUpdate,
     WachtlSeriesPoint,
     WachtlSettingsOut,
     WachtlSettingsUpdate,
@@ -33,7 +46,7 @@ from app.schemas.schemas import (
     WachtlTokenCreated,
     WachtlTokenOut,
 )
-from app.services import audit, kvstore, wachtl_service
+from app.services import audit, kvstore, wachtl_events, wachtl_service
 from app.services.proc import validate_network_target
 
 router = APIRouter(prefix="/api/clients", tags=["clients"])
@@ -291,3 +304,172 @@ def probe_series(
 ) -> list[dict]:
     since, until = resolve_range(range, start, end, default="24h")
     return wachtl_service.series(db, probe_id, check_id, since, until, min(max(points, 10), 5000))
+
+
+# --- Störungsmeldungen ------------------------------------------------------
+def _report_out(r: WachtlReport, hosts: dict[int, str], sites: dict[int, str]) -> WachtlReportOut:
+    return WachtlReportOut(
+        id=r.id, probe_id=r.probe_id, site_id=r.site_id, probe_hostname=hosts.get(r.probe_id, ""),
+        site_name=sites.get(r.site_id, ""), occurred_at=r.occurred_at, received_at=r.received_at,
+        category=r.category, category_label=wachtl_events.REPORT_CATEGORIES.get(r.category, r.category),
+        duration=r.duration, duration_label=wachtl_events.REPORT_DURATIONS.get(r.duration, r.duration),
+        description=r.description, reported_user=r.reported_user, hostname=r.hostname, status=r.status,
+        note=r.note, done_by=r.done_by, done_at=r.done_at, diagnostic_run_id=r.diagnostic_run_id,
+    )
+
+
+def _probe_hosts(db: Session) -> dict[int, str]:
+    return {p.id: p.hostname for p in db.execute(select(WachtlProbe)).scalars()}
+
+
+@router.get("/reports", response_model=list[WachtlReportOut])
+def list_reports(
+    status_: str = Query("all", alias="status", pattern="^(open|done|all)$"),
+    range: str = "30d",
+    start: str | None = None,
+    end: str | None = None,
+    site_id: int | None = None,
+    probe_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[WachtlReportOut]:
+    since, until = resolve_range(range, start, end, default="30d")
+    q = select(WachtlReport)
+    if status_ != "all":
+        q = q.where(WachtlReport.status == status_)
+    if since is not None:
+        q = q.where(WachtlReport.occurred_at >= since)
+    if until is not None:
+        q = q.where(WachtlReport.occurred_at <= until)
+    if site_id is not None:
+        q = q.where(WachtlReport.site_id == site_id)
+    if probe_id is not None:
+        q = q.where(WachtlReport.probe_id == probe_id)
+    rows = db.execute(q.order_by(WachtlReport.occurred_at.desc()).limit(1000)).scalars()
+    hosts, sites = _probe_hosts(db), _site_names(db)
+    return [_report_out(r, hosts, sites) for r in rows]
+
+
+@router.post("/reports/{report_id}/status", response_model=WachtlReportOut)
+def set_report_status(report_id: int, payload: WachtlReportStatusUpdate, request: Request,
+                      db: Session = Depends(get_db), user: User = Depends(require_admin)) -> WachtlReportOut:
+    r = db.get(WachtlReport, report_id)
+    if r is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meldung nicht gefunden")
+    r.status = payload.status
+    if payload.note is not None:
+        r.note = payload.note.strip() or None
+    r.done_by = user.username if payload.status == "done" else None
+    r.done_at = utcnow() if payload.status == "done" else None
+    audit.record(db, "wachtl_report_done" if payload.status == "done" else "wachtl_report_reopen",
+                 user_id=user.id, username=user.username, detail=str(report_id), ip=client_ip(request))
+    db.commit()
+    return _report_out(r, _probe_hosts(db), _site_names(db))
+
+
+# --- Client-Hinweise --------------------------------------------------------
+@router.get("/findings", response_model=list[WachtlFindingOut])
+def list_findings(
+    days: int = Query(7, ge=1, le=400),
+    probe_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[WachtlFindingOut]:
+    """Aktive Hinweise immer, behobene der letzten ``days`` Tage; aktive und schwere zuerst."""
+    cutoff = utcnow() - timedelta(days=days)
+    q = select(WachtlFinding).where(
+        or_(WachtlFinding.state == "active", WachtlFinding.resolved_at >= cutoff))
+    if probe_id is not None:
+        q = q.where(WachtlFinding.probe_id == probe_id)
+    rows = list(db.execute(q.order_by(WachtlFinding.detected_at.desc()).limit(500)).scalars())
+    sev = {"critical": 0, "warning": 1, "info": 2}
+    rows.sort(key=lambda f: (f.state != "active", sev.get(f.severity, 3)))
+    hosts = _probe_hosts(db)
+    out = []
+    for f in rows:
+        try:
+            details = {str(k): str(v) for k, v in json.loads(f.details_json or "{}").items()}
+        except (json.JSONDecodeError, AttributeError):
+            details = {}
+        out.append(WachtlFindingOut(
+            id=f.id, probe_id=f.probe_id, probe_hostname=hosts.get(f.probe_id, ""), site_id=f.site_id,
+            kind=f.kind, kind_label=wachtl_events.FINDING_KINDS.get(f.kind, f.kind), severity=f.severity,
+            state=f.state, adapter=f.adapter, adapter_description=f.adapter_description, title=f.title,
+            message=f.message, solution=f.solution, details=details, detected_at=f.detected_at,
+            resolved_at=f.resolved_at,
+        ))
+    return out
+
+
+# --- Ausfälle ---------------------------------------------------------------
+@router.get("/incidents", response_model=list[WachtlIncidentOut])
+def list_incidents(
+    range: str = "24h",
+    start: str | None = None,
+    end: str | None = None,
+    site_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[WachtlIncidentOut]:
+    """Störungen mit Ursache je Standort (Minutenauflösung, höchstens ``wachtl_incident_max_days``)."""
+    now = utcnow()
+    since, until = resolve_range(range, start, end, default="24h")
+    until = min(until or now, now)
+    floor = until - timedelta(days=settings.wachtl_incident_max_days)
+    since = max(since or floor, floor)
+    hosts = _probe_hosts(db)
+    check_names = {c.id: c.name for c in db.execute(select(WachtlCheck)).scalars()}
+    out = []
+    for inc in wachtl_service.incidents(db, since, until, site_id):
+        end_dt = datetime.fromtimestamp(inc["end"], UTC)
+        out.append(WachtlIncidentOut(
+            **{k: inc[k] for k in ("scope", "cause", "cause_label", "hint", "site_id", "site_name",
+                                   "probe_ids", "check_id", "check_ids", "minutes", "affected_minutes",
+                                   "max_loss_pct")},
+            probe_hostnames=[hosts.get(p, f"#{p}") for p in inc["probe_ids"]],
+            check_names=[check_names.get(c, f"#{c}") for c in inc["check_ids"]],
+            start=datetime.fromtimestamp(inc["start"], UTC), end=end_dt,
+            ongoing=(now - end_dt).total_seconds() < 180,
+        ))
+    return out
+
+
+# --- Diagnose ---------------------------------------------------------------
+def _start_diag(probe_id: int, report_id: int | None) -> WachtlDiagnoseStarted:
+    with session_scope() as db:
+        probe = db.get(WachtlProbe, probe_id)
+        if probe is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Probe nicht gefunden")
+        targets = [t["host"] for t in wachtl_service.diagnose_targets(db, probe)]
+    try:
+        wachtl_service.start_diagnostics(probe_id, report_id=report_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return WachtlDiagnoseStarted(started=True, targets=targets)
+
+
+@router.post("/probes/{probe_id}/diagnose", response_model=WachtlDiagnoseStarted,
+             status_code=status.HTTP_202_ACCEPTED)
+def diagnose_probe(probe_id: int, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)) -> WachtlDiagnoseStarted:
+    """netprobe-Diagnose (Ping, MTU, Traceroute) zu den Zielen des Standorts und zum PC – läuft im
+    Hintergrund, Ergebnis unter Netzwerk-Diagnose."""
+    out = _start_diag(probe_id, None)
+    audit.record(db, "wachtl_diagnose", user_id=user.id, username=user.username, detail=f"Probe {probe_id}",
+                 ip=client_ip(request))
+    db.commit()
+    return out
+
+
+@router.post("/reports/{report_id}/diagnose", response_model=WachtlDiagnoseStarted,
+             status_code=status.HTTP_202_ACCEPTED)
+def diagnose_report(report_id: int, request: Request, db: Session = Depends(get_db),
+                    user: User = Depends(require_admin)) -> WachtlDiagnoseStarted:
+    r = db.get(WachtlReport, report_id)
+    if r is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Meldung nicht gefunden")
+    out = _start_diag(r.probe_id, r.id)
+    audit.record(db, "wachtl_diagnose", user_id=user.id, username=user.username,
+                 detail=f"Meldung {report_id}", ip=client_ip(request))
+    db.commit()
+    return out

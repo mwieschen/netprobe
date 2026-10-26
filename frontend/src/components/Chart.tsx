@@ -9,6 +9,13 @@ export interface Series {
   yAxisIndex?: number;
 }
 
+// Senkrechte Markierung zu einem Zeitpunkt (z. B. Störungsmeldung eines Benutzers).
+export interface Marker {
+  ts: number;
+  label: string;
+  color?: string;
+}
+
 interface Props {
   series: Series[];
   height?: number;
@@ -22,6 +29,7 @@ interface Props {
   // Wird (verzögert) mit dem gezoomten Bereich aufgerufen – die Seite lädt dann
   // die Daten für genau diesen Ausschnitt in voller Auflösung nach.
   onZoomRange?: (start: number, end: number) => void;
+  markers?: Marker[];
 }
 
 interface ZoomState {
@@ -33,7 +41,7 @@ interface ZoomState {
 // Zeitachse in lokaler Zeit; die Datenpunkte kommen als [epoch_ms, wert].
 // Zoomen: Mausrad / Schieberegler / "Bereich aufziehen" (Toolbox), Zurücksetzen per Toolbox.
 export default function TimeSeriesChart({
-  series, height = 320, yName, y2Name, xMin, xMax, zoomKey, onZoomRange,
+  series, height = 320, yName, y2Name, xMin, xMax, zoomKey, onZoomRange, markers,
 }: Props) {
   const ref = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -147,7 +155,7 @@ export default function TimeSeriesChart({
               ]
             : []),
         ],
-        series: series.map((s) => ({
+        series: series.map((s, i) => ({
           name: s.name,
           type: s.type ?? "line",
           showSymbol: false,
@@ -157,11 +165,25 @@ export default function TimeSeriesChart({
           itemStyle: s.color ? { color: s.color } : undefined,
           lineStyle: s.color ? { color: s.color } : undefined,
           data: s.data,
+          ...(i === 0 && markers?.length
+            ? {
+                markLine: {
+                  symbol: "none",
+                  silent: false,
+                  label: { formatter: "{b}", color: textColor, fontSize: 11 },
+                  data: markers.map((m) => ({
+                    name: m.label,
+                    xAxis: m.ts,
+                    lineStyle: { color: m.color ?? "#f59e0b", type: "dashed", width: 1.5 },
+                  })),
+                },
+              }
+            : {}),
         })),
       },
       { notMerge: true },
     );
-  }, [series, yName, y2Name, xMin, xMax, zoomKey]);
+  }, [series, yName, y2Name, xMin, xMax, zoomKey, markers]);
 
   return <div ref={ref} style={{ height, width: "100%" }} />;
 }

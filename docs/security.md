@@ -95,7 +95,12 @@ Der einzige Endpunkt, den Client-PCs erreichen müssen; standardmäßig **abgesc
 - Ingest: nur `check_id` wird übernommen (muss der Probe zugewiesen sein), feste
   Metrik-Liste, Zeitfenster −8 Tage/+5 min, Body ≤ 2 MB, entpackt ≤ 8 MB (gzip-Bombe).
 - Daten der Probes erreichen nie `proc.py`; Check-Ziele setzt nur der Admin (validiert).
-- Enrollment, Abmeldung, Token und Check-Änderungen landen im Audit-Log.
+- Störungsmeldungen/Client-Hinweise: Freitext wird von Steuerzeichen bereinigt und gekürzt, im UI nur als Text
+  gerendert (kein HTML). Benutzer- und Rechnername aus der Meldung sind personenbezogen – Aufbewahrung
+  `NETPROBE_WACHTL_EVENT_RETENTION_DAYS` (365).
+- Automatische Diagnose nach einer Meldung misst nur Ziele, die der Admin als Check angelegt hat, plus die
+  Adresse des PCs (validierte IP); gedrosselt je Standort.
+- Enrollment, Abmeldung, Token, Check-Änderungen, Meldungsstatus und Diagnose-Starts landen im Audit-Log.
 
 ## VoIP-/3CX-Verbindungstest
 

@@ -195,6 +195,19 @@ class Settings(BaseSettings):
     # Obergrenzen für einen Upload (komprimiert / entpackt).
     wachtl_max_body_bytes: int = 2 * 1024 * 1024
     wachtl_max_ingest_bytes: int = 8 * 1024 * 1024
+    # Client-Hinweise (Kabel, Link, Treiber …) erkennen/senden und als Sprechblase am PC zeigen.
+    wachtl_client_findings_enabled: bool = True
+    wachtl_client_findings_notify: bool = True
+    # Ab diesem Verlust (in %) einer Minute gilt ein Check in der Ausfallanalyse als gestört.
+    wachtl_outage_loss_pct: float = 25.0
+    # Längster Zeitraum der Ausfallanalyse (nur 1-min-Buckets sind genau genug).
+    wachtl_incident_max_days: int = 14
+    # Störungsmeldung startet automatisch einen netprobe-Diagnose-Lauf (Ping/MTU/Traceroute
+    # zu den Zielen des Standorts und zum PC); höchstens einer je Standort und Sperrzeit.
+    wachtl_report_diagnostics: bool = True
+    wachtl_diagnostics_cooldown_min: int = 10
+    # Aufbewahrung von Meldungen und behobenen Hinweisen
+    wachtl_event_retention_days: int = 365
 
     # --- Login / Rate Limiting ---
     login_rate_max_attempts: int = 5
