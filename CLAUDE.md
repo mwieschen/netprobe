@@ -58,7 +58,12 @@ smoke test; while `UPDATE_IN_PROGRESS=1` any failure triggers `on_exit()` → `r
 Flags: `--rebuild-frontend`, `--run-migrations`, `--backup-only`, `--rollback[=DIR]`,
 `--list-backups`, `--force`. Initial admin password is random (shown once) unless
 `NETPROBE_ADMIN_PASSWORD`. nginx/logrotate are dpkg-style conffiles (locally modified → kept, new
-version written as `*.netprobe-new`). See `docs/installation.md`, `docs/update.md`.
+version written as `*.netprobe-new`). The release package also bundles the **unmodified Wachtl Windows setup**:
+`build-release.sh` fetches the newest `releases/<ver>/` of fkroczak/Wachtl (override `WACHTL_VERSION`), verifies it
+against its `SHA256SUMS.txt` and stages it as `clients/wachtl/`; `install.sh` `deploy_clients()` copies it to
+`/opt/netprobe/clients/wachtl/` (no restart; excluded from snapshots; kept if the source has none), served admin-only
+via `GET /api/clients/setup` (`wachtl_service.client_setup()`, `settings.wachtl_client_dir`). End-user walkthrough:
+`ANLEITUNG.md` (in the package root). See `docs/installation.md`, `docs/update.md`.
 
 ## Architecture
 

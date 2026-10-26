@@ -36,12 +36,18 @@ nginx (TLS) ─▶ netprobe /api/probe/v1/*   (app/api/wachtl_probe.py)
 4. **Token erzeugen** (Anzahl Installationen, Gültigkeit). Angezeigt werden Token und der fertige Befehl:
 
    ```powershell
-   WachtlSetup-0.9.2.exe /VERYSILENT /SUPPRESSMSGBOXES /Server=https://netprobe.kunde.local /Pin="…" /Token=wachtl-…
+   WachtlSetup-0.9.6.exe /VERYSILENT /SUPPRESSMSGBOXES /Server=https://netprobe.kunde.local /Pin="…" /Token=wachtl-…
    ```
 
-   Per GPO/Intune/Softwareverteilung auf die PCs. Das Setup stammt aus dem Wachtl-Repository
-   (`releases/<Version>/`). Das vorbelegte Setup aus dem Wachtl-Web-UI gibt es hier nicht – es wird mit
-   Inno Setup unter Windows gebaut.
+   Per GPO/Intune/Softwareverteilung auf die PCs (Schritt für Schritt: `ANLEITUNG.md`). Das unveränderte Setup
+   der jeweils neuesten Wachtl-Version steckt im Release-Paket (`clients/wachtl/`, von
+   `scripts/build-release.sh` aus `releases/<Version>/` des Wachtl-Repositorys geladen und gegen dessen
+   `SHA256SUMS.txt` geprüft); `install.sh` legt es unter `/opt/netprobe/clients/wachtl/` ab
+   (`NETPROBE_WACHTL_CLIENT_DIR`), Download unter *Einrichtung* (`GET /api/clients/setup`, Admin). Das
+   vorbelegte Setup aus dem Wachtl-Web-UI gibt es hier nicht – es wird mit Inno Setup unter Windows gebaut.
+   Ab Wachtl 0.9.3 legt das Setup das Server-Zertifikat als vertrauenswürdig ab (`wachtl-probe.exe trust`); die
+   Wachtl-CA unter `/zertifikat/wachtl.crt` gibt es bei netprobe nicht, die Probe nimmt dann das selbstsignierte
+   netprobe-Zertifikat (passt zum Pin).
 5. Nach etwa 30 Sekunden erscheint der PC in der Standort-Matrix.
 
 Mehrere Server-Adressen (Name und IP, falls die Namensauflösung am Standort fehlt):

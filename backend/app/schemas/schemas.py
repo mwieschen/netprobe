@@ -773,6 +773,13 @@ class DashboardHealth(BaseModel):
 
 
 # --- Wachtl-Clients (netprobe als Zentrale) ---
+class WachtlClientSetup(BaseModel):
+    version: str
+    filename: str
+    sha256: str | None
+    size: int
+
+
 class WachtlSettingsOut(BaseModel):
     enabled: bool
     pin: str | None
@@ -786,6 +793,7 @@ class WachtlSettingsOut(BaseModel):
     iperf_running: bool
     iperf_port: int
     peer_host: str
+    setup: WachtlClientSetup | None = None
 
 
 class WachtlSettingsUpdate(BaseModel):

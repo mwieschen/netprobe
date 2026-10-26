@@ -278,3 +278,24 @@ def test_rollup_to_hours(wachtl):
     row = rows[0]
     assert (row.step_s, row.count, row.loss, row.rtt_min, row.rtt_n) == (3600, 36, 3, 5.0, 33)
     assert row.bucket_ts == base
+
+
+# --- Mitgeliefertes Wachtl-Setup --------------------------------------------
+def test_client_setup_info_and_download(admin, tmp_path, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "wachtl_client_dir", tmp_path / "fehlt")
+    assert admin.get("/api/clients/settings").json()["setup"] is None
+    assert admin.get("/api/clients/setup").status_code == 404
+
+    d = tmp_path / "wachtl"
+    d.mkdir()
+    (d / "WachtlSetup-0.9.6.exe").write_bytes(b"MZ-test")
+    (d / "SHA256SUMS.txt").write_text("ABCDEF  WachtlSetup-0.9.6.exe\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "wachtl_client_dir", d)
+    setup = admin.get("/api/clients/settings").json()["setup"]
+    assert setup == {"version": "0.9.6", "filename": "WachtlSetup-0.9.6.exe", "sha256": "abcdef", "size": 7}
+    r = admin.get("/api/clients/setup")
+    assert r.status_code == 200
+    assert r.content == b"MZ-test"
+    assert "WachtlSetup-0.9.6.exe" in r.headers["content-disposition"]

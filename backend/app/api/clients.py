@@ -9,6 +9,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -33,6 +34,7 @@ from app.schemas.schemas import (
     WachtlCheckCreate,
     WachtlCheckOut,
     WachtlCheckUpdate,
+    WachtlClientSetup,
     WachtlCommandOut,
     WachtlDiagnoseStarted,
     WachtlEventOut,
@@ -76,6 +78,7 @@ def _settings_out(db: Session, request: Request) -> WachtlSettingsOut:
 
     pin, pin_error = wachtl_service.tls_pin()
     rtp_enabled, rtp_port = _rtp_wanted(db)
+    setup = wachtl_service.client_setup()
     return WachtlSettingsOut(
         enabled=wachtl_service.is_enabled(db),
         pin=pin,
@@ -89,6 +92,7 @@ def _settings_out(db: Session, request: Request) -> WachtlSettingsOut:
         iperf_running=iperf3_server.is_running(),
         iperf_port=iperf3_server.port,
         peer_host=wachtl_measure.peer_host(request.url.hostname),
+        setup=WachtlClientSetup(**{k: v for k, v in setup.items() if k != "path"}) if setup else None,
     )
 
 
@@ -96,6 +100,17 @@ def _settings_out(db: Session, request: Request) -> WachtlSettingsOut:
 def get_settings(request: Request, db: Session = Depends(get_db),
                  _: User = Depends(get_current_user)) -> WachtlSettingsOut:
     return _settings_out(db, request)
+
+
+@router.get("/setup")
+def download_setup(_: User = Depends(require_admin)) -> FileResponse:
+    """Mitgeliefertes, unverändertes Wachtl-Setup für die Verteilung auf die PCs."""
+    setup = wachtl_service.client_setup()
+    if setup is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "Kein Wachtl-Setup installiert – netprobe aus dem Release-Paket installieren.")
+    return FileResponse(setup["path"], media_type="application/vnd.microsoft.portable-executable",
+                        filename=setup["filename"])
 
 
 @router.put("/settings", response_model=WachtlSettingsOut)

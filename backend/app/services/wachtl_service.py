@@ -72,6 +72,32 @@ def tls_pin() -> tuple[str | None, str | None]:
         return None, f"Zertifikat {path} nicht lesbar: {exc}"
 
 
+def client_setup() -> dict | None:
+    """Mitgeliefertes Wachtl-Setup (``settings.wachtl_client_dir``) → {version, filename, sha256, size, path}.
+
+    None, wenn kein Setup installiert ist (z. B. Repository-Checkout statt Release-Paket). Die Prüfsumme
+    stammt aus der SHA256SUMS.txt des Wachtl-Releases (beim Bau des Pakets bereits verifiziert)."""
+    base = settings.wachtl_client_dir
+    try:
+        exes = sorted(base.glob("WachtlSetup-*.exe"))
+    except OSError:
+        return None
+    if not exes:
+        return None
+    exe = exes[-1]
+    version = exe.stem.removeprefix("WachtlSetup-")
+    sha256 = None
+    try:
+        for line in (base / "SHA256SUMS.txt").read_text(encoding="utf-8", errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].lstrip("*") == exe.name:
+                sha256 = parts[0].lower()
+    except OSError:
+        pass
+    return {"version": version, "filename": exe.name, "sha256": sha256, "size": exe.stat().st_size,
+            "path": exe}
+
+
 # --- Konfiguration ----------------------------------------------------------
 def checks_for_probe(db: Session, probe: WachtlProbe) -> list[WachtlCheck]:
     return list(db.execute(
