@@ -17,6 +17,7 @@ from app.api import (
     capture_jobs,
     captures,
     clients,
+    clients_notify,
     diagnostics,
     health,
     health_checks,
@@ -111,6 +112,7 @@ for router in (
     users.router,
     audit_api.router,
     clients.router,
+    clients_notify.router,
     wachtl_probe.router,
 ):
     app.include_router(router)

@@ -1,7 +1,7 @@
 # netprobe als Zentrale für Wachtl-Clients
 
 Stand: 2026-10-23 · Phase 1 (Ping), Phase 2 (Meldungen, Hinweise, Ausfallanalyse, Diagnose) und Phase 3
-(Pfad, Bandbreite, Sprache) umgesetzt; Phase 4 (Benachrichtigung) in Arbeit
+(Pfad, Bandbreite, Sprache) und Phase 4 (E-Mail-Benachrichtigung) umgesetzt
 
 ## Ziel
 
@@ -145,8 +145,36 @@ Check-Typen wie in Wachtl, Felder und Standardwerte an einer Stelle (`app/servic
 - Ausfallanalyse und Matrix-Ampel für Ping bleiben unverändert; Pfad/Bandbreite/Sprache zeigen in der Matrix die
   letzte Messung (7 Tage). Ergebnisse werden `NETPROBE_WACHTL_RESULT_RETENTION_DAYS` (365) aufbewahrt.
 
-## Nächste Phasen
+## E-Mail-Benachrichtigung (Phase 4)
 
+Einrichtung im Web-UI unter **Clients (Wachtl) → Benachrichtigung (E-Mail)** (nur Admins):
 
-**Phase 4 – Benachrichtigung** (offen): E-Mail/Teams würde das Prinzip „keine ausgehenden Webhooks/Mails“
-aufheben – nur opt-in, nur an selbst konfigurierte Ziele.
+- **SMTP-Server**: Host, Port, Verschlüsselung (STARTTLS 587, SSL/TLS 465, keine – nur internes Relay),
+  Benutzer/Passwort (leer = ohne Anmeldung), Absender, Zertifikatsprüfung (Standard an; aus nur für interne
+  Server mit selbstsigniertem Zertifikat – die Oberfläche warnt). **Testmail** an eine beliebige Adresse.
+- **Empfänger**: Name, Adresse, Standort (oder alle), Mindest-Schwere (ab Info / ab Warnung / nur kritisch) und
+  was sie erhalten: Störungen & PCs offline, Entwarnungen, Ereignisse, Störungsmeldungen der Benutzer.
+- **Grenzwerte**: Störung melden ab N Minuten Dauer (2), PC offline nach N Minuten ohne Kontakt (15),
+  höchstens N Mails je Empfänger und Stunde (20), Adresse von netprobe für den Link in der Mail.
+
+**Ablauf**: Der Scheduler-Job `wachtl_notify` läuft jede Minute (auch bei pausierter Automatisierung) und
+gleicht die aktuellen Lagen mit `wachtl_alert_states` ab – jede Störung und jeder Offline-PC wird genau einmal
+gemeldet, das Ende als **Entwarnung** (mit Dauer). Dazu kommen neue Ereignisse (`wachtl_events.notified_at`,
+höchstens 1 h alt) und Störungsmeldungen. Jeder Empfänger erhält **eine Sammel-Mail** je Lauf; Betreff mit
+„KRITISCH“, wenn etwas Kritisches dabei ist. Ist die Benachrichtigung aus, werden die Zustände trotzdem
+fortgeschrieben – beim Einschalten kommt keine Mailflut über Vergangenes. Versandprotokoll im UI.
+
+| Schwere | Beispiele |
+| --- | --- |
+| kritisch | ganzer Standort ohne Gateway oder Internet; MOS unter 3,1 |
+| Warnung | einzelner PC mit Gateway-/WAN-/Ziel-Störung; PC offline; Bandbreite/MOS unter Schwellwert; Messfehler; Störungsmeldung |
+| Info | Pfadwechsel; Messlücke eines einzelnen PCs |
+
+**Passwort**: verschlüsselt im KV-Store (Fernet, Schlüssel aus `NETPROBE_SECRET_KEY` abgeleitet), nie über die
+API zurückgegeben, nie im Log/Audit. Wird `NETPROBE_SECRET_KEY` geändert, ist es nicht mehr lesbar – die
+Oberfläche meldet das, Passwort neu eingeben. Neue Abhängigkeit: `cryptography` (installiert `install.sh` beim
+Update automatisch, weil sich `pyproject.toml` geändert hat).
+
+Mit Phase 4 verschickt netprobe **erstmals selbst E-Mails** – nur an den eingetragenen SMTP-Server und die
+eingetragenen Empfänger, nur wenn eingeschaltet. Die übrigen Funktionen (z. B. Retransmission-Schwellwerte)
+bleiben ohne ausgehende Benachrichtigung.

@@ -300,6 +300,10 @@ def rollup_and_prune() -> None:
                      "%d Batch-IDs gelöscht", len(groups), n_min, n_hour, n_batch)
     wachtl_measure.rollup_and_prune()
     n_rep, n_find = prune_events()
+    from app.services import wachtl_notify
+
+    with session_scope() as db:
+        wachtl_notify.prune(db)
     if n_rep or n_find:
         log.info("Wachtl: %d Meldungen, %d behobene Hinweise gelöscht", n_rep, n_find)
 

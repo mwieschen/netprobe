@@ -47,7 +47,8 @@ HEALTH_JOB_PREFIX = "health_probe_"
 RETRANS_JOB_ID = "retransmission_monitor"
 # Housekeeping-Jobs laufen unabhängig vom globalen Automatisierungs-Schalter weiter
 # (keine "Tests", sondern interne Wartung).
-_HOUSEKEEPING_JOB_IDS = frozenset({"ping_aggregate", "retention_cleanup"})
+# wachtl_notify: Benachrichtigung ist kein Test – läuft auch bei pausierter Automatisierung.
+_HOUSEKEEPING_JOB_IDS = frozenset({"ping_aggregate", "retention_cleanup", "wachtl_notify"})
 
 
 class SchedulerService:
@@ -149,6 +150,14 @@ class SchedulerService:
 
     async def _cleanup(self) -> None:
         await asyncio.to_thread(cleanup_retention)
+
+    async def _wachtl_notify(self) -> None:
+        from app.services import wachtl_notify
+
+        try:
+            await asyncio.to_thread(wachtl_notify.run_once)
+        except Exception:  # noqa: BLE001 – ein Fehler darf den nächsten Lauf nicht verhindern
+            log.exception("Benachrichtigungslauf fehlgeschlagen")
 
     # --- Verwaltung ---
     def reschedule_speedtest(self) -> None:
@@ -304,6 +313,10 @@ class SchedulerService:
         )
         self.scheduler.add_job(
             self._cleanup, IntervalTrigger(hours=6), id="retention_cleanup", coalesce=True
+        )
+        self.scheduler.add_job(
+            self._wachtl_notify, IntervalTrigger(minutes=1), id="wachtl_notify", coalesce=True,
+            max_instances=1,
         )
         self.scheduler.start()
         self._apply_enabled_state()

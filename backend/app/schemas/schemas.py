@@ -1109,3 +1109,94 @@ class WachtlCommandOut(BaseModel):
     id: int
     type: str
     check_id: int | None
+
+
+# --- Wachtl-Benachrichtigung (E-Mail) ---
+class WachtlNotifySettingsOut(BaseModel):
+    enabled: bool
+    smtp_host: str
+    smtp_port: int
+    smtp_security: str
+    smtp_username: str
+    smtp_from: str
+    verify_tls: bool
+    public_url: str
+    min_incident_minutes: int
+    offline_after_min: int
+    max_mails_per_hour: int
+    # Passwort wird nie zurückgegeben – nur ob eins gespeichert ist
+    password_set: bool
+    password_error: str | None
+    ready_error: str | None
+
+
+class WachtlNotifySettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    smtp_host: str | None = Field(default=None, max_length=253)
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
+    smtp_security: str | None = Field(default=None, pattern="^(none|starttls|ssl)$")
+    smtp_username: str | None = Field(default=None, max_length=254)
+    # None = unverändert, "" = löschen
+    smtp_password: str | None = Field(default=None, max_length=512)
+    smtp_from: str | None = Field(default=None, max_length=254)
+    verify_tls: bool | None = None
+    public_url: str | None = Field(default=None, max_length=300)
+    min_incident_minutes: int | None = Field(default=None, ge=1, le=120)
+    offline_after_min: int | None = Field(default=None, ge=2, le=1440)
+    max_mails_per_hour: int | None = Field(default=None, ge=1, le=500)
+
+
+class WachtlRecipientBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    email: str = Field(min_length=3, max_length=254)
+    enabled: bool = True
+    site_id: int | None = None
+    min_severity: str = Field(default="warning", pattern="^(info|warning|critical)$")
+    notify_incidents: bool = True
+    notify_recovery: bool = True
+    notify_events: bool = True
+    notify_reports: bool = True
+
+
+class WachtlRecipientCreate(WachtlRecipientBase):
+    pass
+
+
+class WachtlRecipientUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    email: str | None = Field(default=None, min_length=3, max_length=254)
+    enabled: bool | None = None
+    site_id: int | None = None
+    min_severity: str | None = Field(default=None, pattern="^(info|warning|critical)$")
+    notify_incidents: bool | None = None
+    notify_recovery: bool | None = None
+    notify_events: bool | None = None
+    notify_reports: bool | None = None
+
+
+class WachtlRecipientOut(ORMModel):
+    id: int
+    name: str
+    email: str
+    enabled: bool
+    site_id: int | None
+    min_severity: str
+    notify_incidents: bool
+    notify_recovery: bool
+    notify_events: bool
+    notify_reports: bool
+    created_at: datetime
+
+
+class WachtlNotificationOut(ORMModel):
+    id: int
+    ts: datetime
+    recipient: str
+    subject: str
+    items: int
+    ok: bool
+    error: str | None
+
+
+class WachtlTestMailRequest(BaseModel):
+    to: str = Field(min_length=3, max_length=254)

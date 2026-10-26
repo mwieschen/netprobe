@@ -1081,3 +1081,49 @@ export interface WachtlCommand {
   type: "run_check" | "retrace";
   check_id: number | null;
 }
+
+// --- Wachtl-Benachrichtigung (/api/clients/notify) ---
+export type SmtpSecurity = "none" | "starttls" | "ssl";
+export type Severity = "info" | "warning" | "critical";
+
+export interface WachtlNotifySettings {
+  enabled: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_security: SmtpSecurity;
+  smtp_username: string;
+  smtp_from: string;
+  verify_tls: boolean;
+  public_url: string;
+  min_incident_minutes: number;
+  offline_after_min: number;
+  max_mails_per_hour: number;
+  // Passwort wird nie geliefert – nur ob eins gespeichert ist
+  password_set: boolean;
+  password_error: string | null;
+  ready_error: string | null;
+}
+
+export interface WachtlRecipient {
+  id: number;
+  name: string;
+  email: string;
+  enabled: boolean;
+  site_id: number | null;
+  min_severity: Severity;
+  notify_incidents: boolean;
+  notify_recovery: boolean;
+  notify_events: boolean;
+  notify_reports: boolean;
+  created_at: string;
+}
+
+export interface WachtlNotification {
+  id: number;
+  ts: string;
+  recipient: string;
+  subject: string;
+  items: number;
+  ok: boolean;
+  error: string | null;
+}

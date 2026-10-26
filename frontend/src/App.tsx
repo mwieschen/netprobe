@@ -20,6 +20,7 @@ import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
 import ClientsPage from "./pages/Clients";
 import ClientDetailPage from "./pages/ClientDetail";
+import ClientsNotifyPage from "./pages/ClientsNotify";
 
 const NAV = [
   { to: "/", label: "Dashboard", end: true },
@@ -73,6 +74,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/diagnostics" element={<NetworkDiagnosticsPage />} />
           <Route path="/clients" element={<ClientsPage />} />
+          <Route path="/clients/notify" element={<ClientsNotifyPage />} />
           <Route path="/clients/:id" element={<ClientDetailPage />} />
           <Route path="/speedtest" element={<SpeedtestPage />} />
           <Route path="/wan" element={<WanPage />} />

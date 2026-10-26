@@ -99,6 +99,7 @@ export default function ClientsPage() {
     <div>
       <div className="topbar">
         <h1>Clients (Wachtl)</h1>
+        {isAdmin && <Link to="/clients/notify" style={{ marginLeft: "auto", marginRight: 16 }}>Benachrichtigung (E-Mail)</Link>}
         {isAdmin && cfg && (
           <label className="row" style={{ cursor: "pointer" }}>
             <input
