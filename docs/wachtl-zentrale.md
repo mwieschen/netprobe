@@ -36,7 +36,7 @@ nginx (TLS) ─▶ netprobe /api/probe/v1/*   (app/api/wachtl_probe.py)
 4. **Token erzeugen** (Anzahl Installationen, Gültigkeit). Angezeigt werden Token und der fertige Befehl:
 
    ```powershell
-   WachtlSetup-0.9.6.exe /VERYSILENT /SUPPRESSMSGBOXES /Server=https://netprobe.kunde.local /Pin="…" /Token=wachtl-…
+   WachtlSetup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /Server=https://netprobe.kunde.local /Pin="…" /Token=wachtl-…
    ```
 
    Per GPO/Intune/Softwareverteilung auf die PCs (Schritt für Schritt: `ANLEITUNG.md`). Das unveränderte Setup

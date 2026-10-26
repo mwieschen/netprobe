@@ -111,7 +111,7 @@ Weboberfläche öffnen (`https://<server>` oder `http://<server>`), anmelden, Me
    das Token und der fertige Installationsbefehl, z. B.:
 
    ```powershell
-   WachtlSetup-0.9.6.exe /VERYSILENT /SUPPRESSMSGBOXES /Server=https://netprobe.firma.local,https://10.0.0.5 /Pin="kpbQ…=" /Token=wachtl-…
+   WachtlSetup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /Server=https://netprobe.firma.local,https://10.0.0.5 /Pin="kpbQ…=" /Token=wachtl-…
    ```
 
    Befehl kopieren und aufbewahren, bis alle PCs des Standorts installiert sind. Pro Standort ein eigenes Token.
@@ -122,7 +122,7 @@ Weboberfläche öffnen (`https://<server>` oder `http://<server>`), anmelden, Me
 Prüfsumme der heruntergeladenen Datei kontrollieren (PowerShell), muss zum SHA256 in netprobe passen:
 
 ```powershell
-Get-FileHash .\WachtlSetup-0.9.6.exe -Algorithm SHA256
+Get-FileHash .\WachtlSetup-1.0.0.exe -Algorithm SHA256
 ```
 
 ---
@@ -143,14 +143,15 @@ Ohne Parameter gestartet, fragt das Setup interaktiv nach Rolle (**Probe**), Ser
 ### 3.2 Viele PCs per GPO (Computer-Startskript)
 
 1. Setup auf eine Freigabe legen, die **Domänencomputer** lesen dürfen, z. B. `\\fs01\software$\wachtl\`.
-2. Startskript `wachtl-install.ps1` daneben (Pin/Token/Server aus Schritt 2.5 einsetzen):
+2. Startskript `wachtl-install.ps1` daneben (Pin/Token/Server aus Schritt 2.5 einsetzen; Dateiname und
+   Version an das Setup unter *Downloads* anpassen):
 
    ```powershell
-   $setup = "\\fs01\software$\wachtl\WachtlSetup-0.9.6.exe"
+   $setup = "\\fs01\software$\wachtl\WachtlSetup-1.0.0.exe"
    $probe = "C:\Program Files\Wachtl\wachtl-probe.exe"
    # Nur installieren, wenn die Probe fehlt oder älter ist
    $ist = if (Test-Path $probe) { (Get-Item $probe).VersionInfo.ProductVersion } else { "" }
-   if ($ist -notlike "0.9.6*") {
+   if ($ist -notlike "1.0.0*") {
        Start-Process $setup -Wait -ArgumentList @(
            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/LOG=C:\Windows\Temp\wachtl-setup.log",
            "/Server=https://netprobe.firma.local,https://10.0.0.5",
