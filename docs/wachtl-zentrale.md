@@ -43,7 +43,7 @@ nginx (TLS) ─▶ netprobe /api/probe/v1/*   (app/api/wachtl_probe.py)
    der jeweils neuesten Wachtl-Version steckt im Release-Paket (`clients/wachtl/`, von
    `scripts/build-release.sh` aus `releases/<Version>/` des Wachtl-Repositorys geladen und gegen dessen
    `SHA256SUMS.txt` geprüft); `install.sh` legt es unter `/opt/netprobe/clients/wachtl/` ab
-   (`NETPROBE_WACHTL_CLIENT_DIR`), Download unter *Einrichtung* (`GET /api/clients/setup`, Admin). Das
+   (`NETPROBE_WACHTL_CLIENT_DIR`), Download auf der Seite *Downloads* (`GET /api/clients/setup`, jeder angemeldete Benutzer). Das
    vorbelegte Setup aus dem Wachtl-Web-UI gibt es hier nicht – es wird mit Inno Setup unter Windows gebaut.
    Ab Wachtl 0.9.3 legt das Setup das Server-Zertifikat als vertrauenswürdig ab (`wachtl-probe.exe trust`); die
    Wachtl-CA unter `/zertifikat/wachtl.crt` gibt es bei netprobe nicht, die Probe nimmt dann das selbstsignierte

@@ -99,7 +99,8 @@ export default function ClientsPage() {
     <div>
       <div className="topbar">
         <h1>Clients (Wachtl)</h1>
-        {isAdmin && <Link to="/clients/notify" style={{ marginLeft: "auto", marginRight: 16 }}>Benachrichtigung (E-Mail)</Link>}
+        <Link to="/downloads" style={{ marginLeft: "auto", marginRight: 16 }}>Windows-Client herunterladen</Link>
+        {isAdmin && <Link to="/clients/notify" style={{ marginRight: 16 }}>Benachrichtigung (E-Mail)</Link>}
         {isAdmin && cfg && (
           <label className="row" style={{ cursor: "pointer" }}>
             <input
@@ -214,6 +215,7 @@ export default function ClientsPage() {
                   <a className="badge ok" href="/api/clients/setup" download={cfg.setup.filename}>
                     {cfg.setup.filename} herunterladen
                   </a>
+                  <Link to="/downloads" style={{ fontSize: 12 }}>Downloads-Seite mit Anleitung</Link>
                   <span className="muted">Wachtl {cfg.setup.version} · {fmtNum(cfg.setup.size / 1048576, 1)} MB</span>
                 </div>
                 {cfg.setup.sha256 && <div className="codeblock" style={{ fontSize: 12 }}>SHA256 {cfg.setup.sha256}</div>}

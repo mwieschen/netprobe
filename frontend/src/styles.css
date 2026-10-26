@@ -47,6 +47,11 @@ button:hover { background: var(--border); }
 button.primary { background: var(--accent); color: #012; border-color: var(--accent); font-weight: 600; }
 button.danger { border-color: var(--err); color: var(--err); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+a.button-link {
+  display: inline-block; padding: 9px 18px; border-radius: var(--radius); font-weight: 600;
+  background: var(--accent); color: #012; border: 1px solid var(--accent);
+}
+a.button-link:hover { filter: brightness(1.1); }
 input, select {
   font: inherit;
   background: var(--bg);

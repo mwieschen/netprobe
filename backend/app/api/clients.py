@@ -103,8 +103,9 @@ def get_settings(request: Request, db: Session = Depends(get_db),
 
 
 @router.get("/setup")
-def download_setup(_: User = Depends(require_admin)) -> FileResponse:
-    """Mitgeliefertes, unverändertes Wachtl-Setup für die Verteilung auf die PCs."""
+def download_setup(_: User = Depends(get_current_user)) -> FileResponse:
+    """Mitgeliefertes, unverändertes Wachtl-Setup für die Verteilung auf die PCs. Enthält keine Geheimnisse
+    (Server, Pin und Token kommen erst als Parameter dazu) – daher für jeden angemeldeten Benutzer."""
     setup = wachtl_service.client_setup()
     if setup is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,

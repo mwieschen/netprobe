@@ -299,3 +299,23 @@ def test_client_setup_info_and_download(admin, tmp_path, monkeypatch):
     assert r.status_code == 200
     assert r.content == b"MZ-test"
     assert "WachtlSetup-0.9.6.exe" in r.headers["content-disposition"]
+
+
+def test_client_setup_download_for_viewer_not_anonymous(client, tmp_path, monkeypatch):
+    from app.core.config import settings
+    from app.core.security import hash_password
+    from app.db.session import session_scope
+    from app.models.user import User
+
+    d = tmp_path / "wachtl"
+    d.mkdir()
+    (d / "WachtlSetup-0.9.6.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(settings, "wachtl_client_dir", d)
+    assert client.get("/api/clients/setup").status_code == 401
+
+    with session_scope() as db:
+        if not db.query(User).filter(User.username == "leser").first():
+            db.add(User(username="leser", password_hash=hash_password("password123"), role="viewer"))
+    login = client.post("/api/auth/login", json={"username": "leser", "password": "password123"})
+    assert login.status_code == 200
+    assert client.get("/api/clients/setup").content == b"MZ"
