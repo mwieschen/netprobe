@@ -299,3 +299,50 @@ def test_client_setup_info_and_download(admin, tmp_path, monkeypatch):
     assert r.status_code == 200
     assert r.content == b"MZ-test"
     assert "WachtlSetup-0.9.6.exe" in r.headers["content-disposition"]
+
+
+def test_client_setup_download_for_viewer_not_anonymous(client, tmp_path, monkeypatch):
+    from app.core.config import settings
+    from app.core.security import hash_password
+    from app.db.session import session_scope
+    from app.models.user import User
+
+    d = tmp_path / "wachtl"
+    d.mkdir()
+    (d / "WachtlSetup-0.9.6.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(settings, "wachtl_client_dir", d)
+    assert client.get("/api/clients/setup").status_code == 401
+
+    with session_scope() as db:
+        if not db.query(User).filter(User.username == "leser").first():
+            db.add(User(username="leser", password_hash=hash_password("password123"), role="viewer"))
+    login = client.post("/api/auth/login", json={"username": "leser", "password": "password123"})
+    assert login.status_code == 200
+    assert client.get("/api/clients/setup").content == b"MZ"
+
+
+# --- Vom Wachtl-Setup erwartete Routen außerhalb des Probe-API ---------------
+def test_healthz_for_setup_check(client):
+    # wachtl-probe.exe check: HTTP 2xx und "status" im Body, sonst „kein Wachtl-Server“
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    assert '"status"' in r.text
+    assert r.json()["status"] == "ok"
+
+
+def test_certificate_download_der(client, tmp_path, monkeypatch):
+    import base64
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "wachtl_tls_cert", tmp_path / "fehlt.pem")
+    assert client.get("/zertifikat/wachtl.crt").status_code == 404
+
+    cert = tmp_path / "fullchain.pem"
+    cert.write_text(TEST_CERT, encoding="ascii")
+    monkeypatch.setattr(settings, "wachtl_tls_cert", cert)
+    r = client.get("/zertifikat/wachtl.crt")
+    assert r.status_code == 200
+    body = "".join(TEST_CERT.strip().splitlines()[1:-1])
+    assert r.content == base64.b64decode(body)
+    assert r.content[0] == 0x30  # DER-SEQUENCE

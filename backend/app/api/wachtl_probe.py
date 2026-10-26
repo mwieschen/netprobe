@@ -41,6 +41,29 @@ from app.services.wachtl_ingest import (
 log = get_logger("netprobe.wachtl.api")
 router = APIRouter(prefix="/api/probe/v1", tags=["wachtl-probe"])
 
+# Außerhalb des Probe-API: das Wachtl-Setup prüft vor der Registrierung ``GET /healthz`` (Antwort muss
+# ``"status"`` enthalten, sonst „Unter dieser Adresse antwortet kein Wachtl-Server“) und holt beim Schritt
+# ``trust`` ``/zertifikat/wachtl.crt``. Beide gibt es auch beim Wachtl-Server (``server/wachtl/__init__.py``).
+root_router = APIRouter(tags=["wachtl-probe"])
+
+
+@root_router.get("/healthz", include_in_schema=False)
+def healthz() -> dict:
+    from app import __version__
+
+    return {"status": "ok", "version": __version__}
+
+
+@root_router.get("/zertifikat/wachtl.crt", include_in_schema=False)
+def server_certificate() -> Response:
+    """Öffentliches, selbstsigniertes Server-Zertifikat (DER) – die Probe legt es als vertrauenswürdig ab,
+    wenn es zum Pin passt. Nur das erste Zertifikat der Kette, nie der Schlüssel."""
+    der = wachtl_service.tls_certificate_der()
+    if der is None:
+        return JSONResponse({"error": "Kein Zertifikat eingerichtet"}, status_code=404)
+    return Response(der, media_type="application/pkix-cert",
+                    headers={"Content-Disposition": 'attachment; filename="wachtl.crt"'})
+
 # Fehlversuche beim Enrollment je Quell-IP (Token-Raten verhindern).
 enroll_rate_limiter = RateLimiter(10, 300)
 

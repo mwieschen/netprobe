@@ -51,7 +51,8 @@ sudo bash install.sh
 - **Update** einer bestehenden Installation: dasselbe Kommando. `install.sh` erkennt, was sich geändert hat,
   legt vorher einen Snapshot an (`/var/lib/netprobe/backups/`), spielt Code und Datenbank-Migrationen ein und
   rollt bei einem Fehler automatisch zurück. Manuell zurück: `sudo bash /opt/netprobe/install.sh --rollback`.
-- Das Wachtl-Setup landet unter `/opt/netprobe/clients/wachtl/` (Download später in der Weboberfläche).
+- Das Wachtl-Setup landet unter `/opt/netprobe/clients/wachtl/` (Download später in der Weboberfläche unter
+  **Downloads**).
 - HTTPS: `install.sh` erzeugt einmalig einen Schlüssel und ein selbstsigniertes Zertifikat unter
   `/etc/netprobe/tls/`. Der **Schlüssel bleibt bei jedem Update gleich**, damit bleibt der Pin der PCs gültig.
 
@@ -114,7 +115,9 @@ Weboberfläche öffnen (`https://<server>` oder `http://<server>`), anmelden, Me
    ```
 
    Befehl kopieren und aufbewahren, bis alle PCs des Standorts installiert sind. Pro Standort ein eigenes Token.
-6. Unter **Einrichtung** auf **WachtlSetup-<Version>.exe herunterladen** klicken.
+6. Menü **Downloads** öffnen und **WachtlSetup-<Version>.exe herunterladen** klicken. Dort stehen auch
+   Prüfsumme, Installationsbefehl (mit Server und Pin, Token einsetzen) und Deinstallationsbefehl zum Kopieren.
+   Jeder angemeldete Benutzer kann das Setup laden; Token erzeugen nur Admins.
 
 Prüfsumme der heruntergeladenen Datei kontrollieren (PowerShell), muss zum SHA256 in netprobe passen:
 
@@ -202,10 +205,12 @@ Messereignisse – je eine Mail beim Beginn und bei der Erholung. Details: `docs
 | Symptom | Ursache und Lösung |
 | --- | --- |
 | Setup: „Das Server-Zertifikat passt nicht zum angegebenen Pin“ | Falscher Pin, oder ein Proxy/Firewall bricht TLS auf. Pin in netprobe prüfen, auf dem PC: `wachtl-probe.exe show-pin --server https://<server>`; TLS-Inspection für netprobe ausnehmen |
+| Setup: „Unter dieser Adresse antwortet kein Wachtl-Server“ | netprobe älter als 1.1.2 (ohne `/healthz`) → aktualisieren. Prüfen im Browser: `https://<server>/healthz` muss `{"status":"ok",…}` zeigen |
+| Setup: „Keine Verbindung zum Wachtl-Server“ / Zeitüberschreitung | TCP 443 vom PC zum Server gesperrt oder Name nicht auflösbar → Firewall prüfen, IP-Adresse als zweite Server-Adresse angeben |
 | Setup: „Server lehnt die Registrierung ab“ | Token abgelaufen, aufgebraucht oder widerrufen → neues Token in netprobe erzeugen |
 | PC erscheint nicht | *Anbindung aktiv* aus? TCP 443 vom PC zum Server gesperrt? Server-Adresse am Standort nicht auflösbar → IP zusätzlich in `NETPROBE_WACHTL_SERVER_URLS` |
 | PC „offline“, Puffer steigt | Server nicht erreichbar. Werte bleiben bis 7 Tage auf dem PC und werden nachgesendet |
-| Kein Download-Link unter *Einrichtung* | netprobe wurde aus einem Repository-Checkout statt aus dem Release-Paket installiert → Paket installieren |
+| Seite *Downloads* meldet „kein Wachtl-Setup installiert“ | netprobe wurde aus einem Repository-Checkout statt aus dem Release-Paket installiert → Paket installieren |
 | Bandbreite/Sprache zu netprobe schlägt fehl | TCP 5201 bzw. UDP 5004 freigeben; iperf3-Server (Seite *iperf3*) bzw. RTP-Reflektor (*Clients › Einrichtung*) einschalten |
 | Alle PCs melden nach Zertifikatstausch Pin-Fehler | Neuer Schlüssel unter `/etc/netprobe/tls/` = neuer Pin → alle PCs mit neuem Pin neu registrieren. Den Schlüssel daher nie neu erzeugen |
 

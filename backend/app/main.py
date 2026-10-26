@@ -114,6 +114,7 @@ for router in (
     clients.router,
     clients_notify.router,
     wachtl_probe.router,
+    wachtl_probe.root_router,
 ):
     app.include_router(router)
 
