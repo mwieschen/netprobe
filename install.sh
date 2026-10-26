@@ -242,7 +242,7 @@ APT_PACKAGES=(
     sqlite3
     tshark wireshark-common
     fping iputils-ping mtr-tiny traceroute iperf3
-    curl jq tar ca-certificates gnupg lsb-release ssl-cert
+    curl jq tar ca-certificates gnupg lsb-release ssl-cert openssl
     libpango-1.0-0 libpangoft2-1.0-0 fonts-dejavu-core
 )
 
@@ -827,6 +827,35 @@ install_conffile() {
     echo "$new" > "$STATE_DIR/conffiles/$key"
 }
 
+# HTTPS für nginx (Port 443). Wachtl-Probes sprechen nur HTTPS und prüfen statt der
+# Zertifikatskette den SPKI-Pin, also den öffentlichen Schlüssel. Der Schlüssel wird daher
+# nur EINMAL erzeugt und nie ersetzt; das Zertifikat wird mit demselben Schlüssel erneuert,
+# wenn es fehlt oder in weniger als 30 Tagen abläuft. So bleibt der Pin dauerhaft gleich.
+setup_tls() {
+    local dir="$ETC_DIR/tls" key cert san host ip
+    key="$dir/privkey.pem"; cert="$dir/fullchain.pem"
+    install -d -m 0755 -o root -g root "$dir"
+    if [ ! -s "$key" ]; then
+        log "Erzeuge TLS-Schlüssel (ECDSA P-256)…"
+        (umask 077; openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$key")             || { warn "TLS-Schlüssel konnte nicht erzeugt werden."; return 0; }
+    fi
+    chown root:root "$key"; chmod 0600 "$key"
+    if [ -s "$cert" ] && openssl x509 -in "$cert" -noout -checkend 2592000 >/dev/null 2>&1; then
+        ok "TLS-Zertifikat vorhanden (${cert})."
+    else
+        host="$(hostname -s 2>/dev/null || echo netprobe)"
+        san="DNS:${host},DNS:$(hostname -f 2>/dev/null || echo "$host"),DNS:localhost,IP:127.0.0.1"
+        for ip in $(hostname -I 2>/dev/null); do
+            case "$ip" in *:*) ;; *) san="${san},IP:${ip}" ;; esac
+        done
+        log "Erzeuge selbstsigniertes TLS-Zertifikat (10 Jahre)…"
+        openssl req -x509 -new -key "$key" -out "$cert" -days 3650 -subj "/CN=${host}"             -addext "subjectAltName=${san}" >/dev/null 2>&1             || { warn "TLS-Zertifikat konnte nicht erzeugt werden."; return 0; }
+        ok "TLS-Zertifikat erzeugt (${cert})."
+    fi
+    # Das Zertifikat ist öffentlich: netprobe liest es, um den Pin für das Setup anzuzeigen.
+    chown root:root "$cert"; chmod 0644 "$cert"
+}
+
 setup_nginx() {
     log "Konfiguriere nginx…"
     install_conffile "$SRC_DIR/deploy/nginx/netprobe.conf" /etc/nginx/sites-available/netprobe.conf
@@ -1354,7 +1383,7 @@ setup_fresh_installation() {
     run_migrations || die "Datenbankmigration fehlgeschlagen. Details siehe oben."
     step "Admin-Benutzer";                   setup_admin
     step "systemd-Dienste";                  setup_systemd; setup_iperf3_service
-    step "nginx, logrotate, GeoIP, Firewall"; setup_geoip; setup_nginx; setup_logrotate; setup_ufw
+    step "nginx, logrotate, GeoIP, Firewall"; setup_geoip; setup_tls; setup_nginx; setup_logrotate; setup_ufw
     if [ "$INTERACTIVE" -eq 1 ]; then
         step "Netzwerk";                     configure_network
     fi
@@ -1390,6 +1419,7 @@ self_heal() {
     setup_user_dirs
     seed_speedtest_license
     setup_env
+    setup_tls
     setup_nginx
     setup_logrotate
     if [ "$(sha256sum < "$SRC_DIR/deploy/systemd/netprobe-iperf3.service")" \
@@ -1444,6 +1474,7 @@ perform_smart_update() {
 
     setup_systemd             # aktualisiert die Unit und startet den Dienst
     setup_iperf3_service
+    setup_tls
     setup_nginx
     setup_logrotate
     setup_admin

@@ -20,6 +20,14 @@ from app.models.speedtest import SpeedtestResult
 from app.models.traceroute import GeoipCache, Traceroute, TracerouteHop, TracerouteTarget
 from app.models.user import User
 from app.models.voip import VoipServer, VoipTest
+from app.models.wachtl import (
+    WachtlCheck,
+    WachtlEnrollToken,
+    WachtlIngestBatch,
+    WachtlProbe,
+    WachtlSample,
+    WachtlSite,
+)
 from app.models.wan import WanResult, WanTarget
 
 __all__ = [
@@ -49,6 +57,12 @@ __all__ = [
     "User",
     "VoipServer",
     "VoipTest",
+    "WachtlCheck",
+    "WachtlEnrollToken",
+    "WachtlIngestBatch",
+    "WachtlProbe",
+    "WachtlSample",
+    "WachtlSite",
     "WanResult",
     "WanTarget",
 ]

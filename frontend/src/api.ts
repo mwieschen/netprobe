@@ -26,6 +26,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, body?: unknown) => request<T>("POST", p, body),
+  put: <T>(p: string, body?: unknown) => request<T>("PUT", p, body),
   patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, body),
   del: <T>(p: string) => request<T>("DELETE", p),
 };
@@ -778,4 +779,102 @@ export interface DashboardHealth {
   db_size_mb: number;
   captures_size_mb: number;
   active_ping_jobs: number;
+}
+
+// --- Wachtl-Clients (/api/clients) ---
+export interface WachtlSettings {
+  enabled: boolean;
+  pin: string | null;
+  pin_error: string | null;
+  server_urls: string[];
+  min_interval_s: number;
+}
+
+export interface WachtlSite {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface WachtlToken {
+  id: number;
+  site_id: number;
+  description: string | null;
+  expires_at: string;
+  max_uses: number;
+  uses: number;
+  revoked: boolean;
+  created_by: string | null;
+  created_at: string;
+}
+
+// Antwort beim Erzeugen: Klartext-Token nur dieses eine Mal.
+export interface WachtlTokenCreated extends WachtlToken {
+  token: string;
+}
+
+export type WachtlRole = "target" | "gateway" | "reference";
+
+export interface WachtlCheck {
+  id: number;
+  name: string;
+  type: string;
+  target: string;
+  role: WachtlRole;
+  interval_s: number;
+  timeout_ms: number;
+  site_id: number | null;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface WachtlProbe {
+  id: number;
+  site_id: number;
+  site_name: string;
+  hostname: string;
+  os: string | null;
+  version: string | null;
+  status: "active" | "disabled";
+  online: boolean;
+  created_at: string;
+  last_seen: string | null;
+  last_ip: string | null;
+  buffer_items: number;
+  uptime_s: number;
+  addresses: string[];
+  deregistered_at: string | null;
+}
+
+export interface WachtlSeriesPoint extends PingSeriesPoint {
+  jitter_ms: number | null;
+}
+
+export type WachtlState = "ok" | "warn" | "down" | "stale";
+
+export interface WachtlCell {
+  check_id: number;
+  state: WachtlState;
+  loss_pct: number | null;
+  rtt_avg: number | null;
+  jitter_ms: number | null;
+  count: number;
+}
+
+export interface WachtlOverview {
+  window_s: number;
+  sites: {
+    site_id: number;
+    name: string;
+    checks: { id: number; name: string; target: string; role: WachtlRole }[];
+    probes: {
+      probe_id: number;
+      hostname: string;
+      online: boolean;
+      status: string;
+      last_seen: string | null;
+      cells: WachtlCell[];
+    }[];
+  }[];
 }

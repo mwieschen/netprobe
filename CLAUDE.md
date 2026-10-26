@@ -277,6 +277,19 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   `Report.data_json`) — sub-test results stay queryable in their own tables/pages. CLI:
   `diagnostics-run` (`--target`, `--tests`), `diagnostics-preset-add`/`-list`/`-delete`. See
   `docs/diagnostics.md`.
+- Wachtl clients — netprobe is the central server for **unmodified** Wachtl Windows probes
+  ([fkroczak/Wachtl](https://github.com/fkroczak/Wachtl); we do not change that code).
+  `app/api/wachtl_probe.py` re-implements Wachtl's probe API v1 (`/api/probe/v1`: enroll, config with
+  ETag, ingest, heartbeat, deregister) — keep it byte-compatible with Wachtl's `server/wachtl/api_probe.py`
+  (errors as `{"error": …}` via `WachtlApiError`, not `{"detail"}`). Off by default (KV `wachtl_enabled`, 404).
+  `app/services/wachtl_ingest.py` is pure (Prometheus-line parser → 1-min `Bucket`s, gzip limit, SPKI pin
+  from PEM via a tiny DER walk, `classify_check`); `wachtl_service.py` does config payload, bucket upsert,
+  matrix overview, series (same shape as `PingSeriesPoint` + `jitter_ms`) and `rollup_and_prune()` (called
+  from `cleanup_retention`: 1-min → 1-h buckets after `wachtl_minute_retention_days`). No raw samples are
+  stored. Admin API `/api/clients` (sites, tokens shown once, checks with `wachtl_min_interval_s` floor,
+  probes), pages `Clients.tsx`/`ClientDetail.tsx`. Probes need HTTPS: `install.sh` `setup_tls` creates a
+  one-time key + self-signed cert in `/etc/netprobe/tls/` (key never rotated → stable pin) and nginx
+  listens on 443. Phases 2–4 (report/findings, path/bandwidth/rtp, alerting): `docs/wachtl-zentrale.md`.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
   host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
   inputs. `iperf3` is added to the installer's apt list; the optional

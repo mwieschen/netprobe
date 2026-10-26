@@ -162,3 +162,7 @@ def cleanup_retention() -> None:
                 "%d Retransmission-Tests gelöscht",
                 n1, n2, n3, n4, n5, n6, n7, n8, n9,
             )
+
+    from app.services import wachtl_service
+
+    wachtl_service.rollup_and_prune()

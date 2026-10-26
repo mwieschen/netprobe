@@ -18,10 +18,13 @@ import RetransmissionsPage from "./pages/Retransmissions";
 import SchedulerPage from "./pages/Scheduler";
 import SettingsPage from "./pages/Settings";
 import UsersPage from "./pages/Users";
+import ClientsPage from "./pages/Clients";
+import ClientDetailPage from "./pages/ClientDetail";
 
 const NAV = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/diagnostics", label: "Netzwerk-Diagnose" },
+  { to: "/clients", label: "Clients (Wachtl)" },
   { to: "/speedtest", label: "Speedtest" },
   { to: "/wan", label: "WAN-Tests" },
   { to: "/ping", label: "Dauerping" },
@@ -69,6 +72,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/diagnostics" element={<NetworkDiagnosticsPage />} />
+          <Route path="/clients" element={<ClientsPage />} />
+          <Route path="/clients/:id" element={<ClientDetailPage />} />
           <Route path="/speedtest" element={<SpeedtestPage />} />
           <Route path="/wan" element={<WanPage />} />
           <Route path="/ping" element={<PingPage />} />
