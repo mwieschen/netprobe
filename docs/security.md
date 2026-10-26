@@ -100,7 +100,12 @@ Der einzige Endpunkt, den Client-PCs erreichen müssen; standardmäßig **abgesc
   `NETPROBE_WACHTL_EVENT_RETENTION_DAYS` (365).
 - Automatische Diagnose nach einer Meldung misst nur Ziele, die der Admin als Check angelegt hat, plus die
   Adresse des PCs (validierte IP); gedrosselt je Standort.
-- Enrollment, Abmeldung, Token, Check-Änderungen, Meldungsstatus und Diagnose-Starts landen im Audit-Log.
+- RTP-Reflektor (UDP, Standard 5004, nur bei aktiver Wachtl-Anbindung): antwortet ausschließlich auf
+  Wachtl-RTP-Pakete, in gleicher Größe (keine Verstärkung), Ratenbegrenzung je Absender und gesamt, begrenzte
+  Sitzungszahl. Ergebnisse der Probes (Pfad/Bandbreite/Sprache) werden auf Wertebereiche geprüft und nur
+  gespeichert; daraus werden nie Befehle ausgeführt. iperf3-Gegenstellen auf Client-PCs nur nach Freigabe je PC.
+- Enrollment, Abmeldung, Token, Check-Änderungen, Meldungsstatus, Diagnose-Starts, „Jetzt messen“-Aufträge und
+  Reflektor-Einstellungen landen im Audit-Log.
 
 ## VoIP-/3CX-Verbindungstest
 

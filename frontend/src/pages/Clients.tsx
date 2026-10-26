@@ -5,6 +5,7 @@ import {
   ApiError,
   WachtlCell,
   WachtlCheck,
+  WachtlEvent,
   WachtlFinding,
   WachtlIncident,
   WachtlOverview,
@@ -19,8 +20,12 @@ import {
 import { useAuth } from "../auth";
 import { ErrorBox, Modal } from "../components/common";
 import { FindingList, IncidentTable, ReportTable } from "../components/WachtlEvents";
+import { CheckModal, EventList } from "../components/WachtlChecks";
 import { fmtDateTime, fmtNum } from "../util";
 
+const TYPE_LABEL: Record<string, string> = {
+  ping: "Ping", path: "Pfad", iperf: "Bandbreite intern", speedtest: "Bandbreite WAN", rtp: "Sprache",
+};
 const ROLE_LABEL: Record<WachtlRole, string> = { target: "Ziel", gateway: "Gateway", reference: "Internet-Referenz" };
 const STATE_CLASS = { ok: "ok", warn: "warn", down: "err", stale: "dim" } as const;
 const STATE_LABEL = { ok: "OK", warn: "auffällig", down: "gestört", stale: "keine Daten" } as const;
@@ -46,12 +51,14 @@ export default function ClientsPage() {
   const [reports, setReports] = useState<WachtlReport[]>([]);
   const [reportFilter, setReportFilter] = useState<"open" | "all">("open");
   const [findings, setFindings] = useState<WachtlFinding[]>([]);
+  const [events, setEvents] = useState<WachtlEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
   function loadEvents() {
     api.get<WachtlIncident[]>(`/api/clients/incidents?range=${incRange}`).then(setIncidents).catch(() => setIncidents([]));
     api.get<WachtlReport[]>(`/api/clients/reports?status=${reportFilter}&range=30d`).then(setReports).catch(() => setReports([]));
+    api.get<WachtlEvent[]>("/api/clients/events?range=7d").then(setEvents).catch(() => setEvents([]));
     api.get<WachtlFinding[]>("/api/clients/findings?days=1").then((f) => setFindings(f.filter((x) => x.state === "active")))
       .catch(() => setFindings([]));
   }
@@ -190,6 +197,11 @@ export default function ClientsPage() {
         </div>
       )}
 
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h2>Ereignisse (7 Tage) <span className="muted" style={{ fontSize: 13 }}>· Pfadwechsel, Bandbreite/MOS unter Schwellwert, Messfehler</span></h2>
+        <EventList events={events.slice(0, 50)} />
+      </div>
+
       {isAdmin && cfg && (
         <div className="card" style={{ marginBottom: 16 }}>
           <h2>Einrichtung</h2>
@@ -208,6 +220,26 @@ export default function ClientsPage() {
               </span>
             )}
           </div>
+          <div className="field">
+            <label>Gegenstellen auf netprobe für Bandbreiten- und Sprachtests (Adresse für die Probes: {cfg.peer_host || "–"})</label>
+            <div className="row">
+              <span className={`badge ${cfg.iperf_running ? "ok" : "dim"}`}>
+                iperf3-Server {cfg.iperf_running ? `aktiv (TCP ${cfg.iperf_port})` : "aus"}
+              </span>
+              <Link to="/iperf3" style={{ fontSize: 12 }}>iperf3-Server steuern</Link>
+              <span className={`badge ${cfg.rtp_running ? "ok" : cfg.rtp_error ? "err" : "dim"}`}>
+                RTP-Reflektor {cfg.rtp_running ? `aktiv (UDP ${cfg.rtp_port})` : cfg.rtp_error ?? "aus"}
+              </span>
+              <label className="row" style={{ cursor: "pointer" }}>
+                <input type="checkbox" checked={cfg.rtp_enabled}
+                  onChange={(e) => run(() => api.put("/api/clients/settings", { rtp_enabled: e.target.checked }))} />
+                RTP-Reflektor an
+              </label>
+            </div>
+            <span className="muted" style={{ fontSize: 12 }}>
+              Firewall: TCP {cfg.iperf_port} bzw. UDP {cfg.rtp_port} von den Client-Netzen zu netprobe freigeben.
+            </span>
+          </div>
           <p className="muted" style={{ fontSize: 13 }}>
             Rollout: Standort anlegen, Token erzeugen und den angezeigten Befehl per Softwareverteilung ausführen
             (Wachtl-Setup ohne Vorbelegung). Checks ab {cfg.min_interval_s} s Intervall.
@@ -223,7 +255,7 @@ export default function ClientsPage() {
             <thead>
               <tr>
                 <th>Name</th><th>Standort</th><th>Status</th><th>Zuletzt gesehen</th><th>IP</th>
-                <th>Version</th><th className="num">Puffer</th><th></th>
+                <th>Version</th><th className="num">Puffer</th><th>Gegenstelle</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -240,6 +272,11 @@ export default function ClientsPage() {
                   <td>{p.last_ip ?? "–"}</td>
                   <td>{p.version ?? "–"}</td>
                   <td className="num">{p.buffer_items}</td>
+                  <td>
+                    <input type="checkbox" checked={p.peer_enabled} disabled={!isAdmin}
+                      title="iperf3-Server und RTP-Reflektor auf diesem PC für Tests anderer PCs"
+                      onChange={(e) => run(() => api.patch(`/api/clients/probes/${p.id}`, { peer_enabled: e.target.checked }))} />
+                  </td>
                   <td className="num">
                     {isAdmin && (
                       <div className="row" style={{ justifyContent: "flex-end" }}>
@@ -259,7 +296,7 @@ export default function ClientsPage() {
                   </td>
                 </tr>
               ))}
-              {!probes.length && <tr><td colSpan={8} className="muted">Noch keine Probe registriert.</td></tr>}
+              {!probes.length && <tr><td colSpan={9} className="muted">Noch keine Probe registriert.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -274,16 +311,16 @@ export default function ClientsPage() {
         <div className="table-scroll">
           <table>
             <thead>
-              <tr><th>Name</th><th>Ziel</th><th>Rolle</th><th>Standort</th><th className="num">Intervall</th><th>Aktiv</th><th></th></tr>
+              <tr><th>Name</th><th>Art</th><th>Ziel</th><th>Standort</th><th>Messung</th><th>Aktiv</th><th></th></tr>
             </thead>
             <tbody>
               {checks.map((c) => (
                 <tr key={c.id}>
                   <td>{c.name}</td>
+                  <td>{TYPE_LABEL[c.type]}{c.type === "ping" && <span className="muted"> · {ROLE_LABEL[c.role]}</span>}</td>
                   <td>{c.target}</td>
-                  <td>{ROLE_LABEL[c.role]}</td>
                   <td>{siteName(c.site_id)}</td>
-                  <td className="num">{c.interval_s}s</td>
+                  <td>{c.summary}</td>
                   <td>
                     <input type="checkbox" checked={c.enabled} disabled={!isAdmin}
                       onChange={(e) => run(() => api.patch(`/api/clients/checks/${c.id}`, { enabled: e.target.checked }))} />
@@ -364,7 +401,8 @@ export default function ClientsPage() {
 
       {modal === "site" && <SiteModal onClose={() => { setModal(null); load(); }} setError={setError} />}
       {modal === "check" && cfg && (
-        <CheckModal sites={sites} minInterval={cfg.min_interval_s} onClose={() => { setModal(null); load(); }} setError={setError} />
+        <CheckModal sites={sites} probes={probes} minInterval={cfg.min_interval_s}
+          onClose={() => { setModal(null); load(); }} setError={setError} />
       )}
       {modal === "token" && (
         <TokenModal sites={sites} onCreated={(t) => { setModal(null); setCreated(t); load(); }}
@@ -389,7 +427,7 @@ function MatrixCell({ cell }: { cell: WachtlCell }) {
   return (
     <td>
       <span className={`badge ${STATE_CLASS[cell.state]}`} title={STATE_LABEL[cell.state]}>
-        {cell.state === "stale" ? "–" : `${fmtNum(cell.rtt_avg, 1, "ms")} · ${fmtNum(cell.loss_pct, 1, "%")}`}
+        {cell.text ?? (cell.state === "stale" ? "–" : `${fmtNum(cell.rtt_avg, 1, "ms")} · ${fmtNum(cell.loss_pct, 1, "%")}`)}
       </span>
     </td>
   );
@@ -414,46 +452,6 @@ function SiteModal({ onClose, setError }: { onClose: () => void; setError: SetEr
       <div className="field"><label>Beschreibung (optional)</label>
         <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
       <button className="primary" onClick={save} disabled={!form.name.trim()}>Speichern</button>
-    </Modal>
-  );
-}
-
-function CheckModal({ sites, minInterval, onClose, setError }: {
-  sites: WachtlSite[]; minInterval: number; onClose: () => void; setError: SetError;
-}) {
-  const [form, setForm] = useState({
-    name: "", target: "", role: "target" as WachtlRole, interval_s: minInterval, timeout_ms: 1000, site_id: "",
-  });
-  async function save() {
-    try {
-      await api.post("/api/clients/checks", { ...form, site_id: form.site_id ? +form.site_id : null });
-      onClose();
-    } catch (err) {
-      setError((err as ApiError).detail);
-    }
-  }
-  return (
-    <Modal title="Ping-Check hinzufügen" onClose={onClose}>
-      <div className="field"><label>Name</label>
-        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Google DNS" /></div>
-      <div className="field"><label>Ziel (IP, Hostname oder „gateway“ = Default-Gateway des PCs)</label>
-        <input value={form.target} onChange={(e) => setForm({ ...form, target: e.target.value })} placeholder="8.8.8.8" /></div>
-      <div className="field"><label>Rolle</label>
-        <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as WachtlRole })}>
-          {Object.entries(ROLE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select></div>
-      <div className="field"><label>Standort</label>
-        <select value={form.site_id} onChange={(e) => setForm({ ...form, site_id: e.target.value })}>
-          <option value="">alle Standorte</option>
-          {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select></div>
-      <div className="field"><label>Intervall (Sekunden, min. {minInterval})</label>
-        <input type="number" min={minInterval} value={form.interval_s}
-          onChange={(e) => setForm({ ...form, interval_s: +e.target.value })} /></div>
-      <div className="field"><label>Timeout (ms)</label>
-        <input type="number" min={100} max={10000} value={form.timeout_ms}
-          onChange={(e) => setForm({ ...form, timeout_ms: +e.target.value })} /></div>
-      <button className="primary" onClick={save} disabled={!form.name.trim() || !form.target.trim()}>Speichern</button>
     </Modal>
   );
 }

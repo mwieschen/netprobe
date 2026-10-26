@@ -2,8 +2,9 @@
 
 Vertrag wie Wachtl 0.9 (``server/wachtl/api_probe.py``): Enrollment mit Token, Konfiguration mit
 ETag, Ingest im Prometheus-Textformat (idempotent per ``X-Batch-Id``), Heartbeat, Abmeldung.
-Fehler antworten wie Wachtl mit ``{"error": "…"}``. Ping-Checks, Störungsmeldungen (``/report``) und
-Client-Hinweise (``/findings``); ``/results/*`` folgen (docs/wachtl-zentrale.md).
+Fehler antworten wie Wachtl mit ``{"error": "…"}``. Ping- und Pfad-Checks (Hop-Pings im Ingest),
+Störungsmeldungen (``/report``), Client-Hinweise (``/findings``) und die Ergebnisse geplanter Messungen
+(``/results/path|bandwidth|rtp``) – siehe docs/wachtl-zentrale.md.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from app.core.security import RateLimiter
 from app.core.timeutils import utcnow
 from app.db.session import get_db, session_scope
 from app.models.wachtl import WachtlEnrollToken, WachtlIngestBatch, WachtlProbe, WachtlSite
-from app.services import audit, wachtl_events, wachtl_service
+from app.services import audit, wachtl_events, wachtl_measure, wachtl_results, wachtl_service
 from app.services.wachtl_ingest import (
     BATCH_ID_RE,
     PROBE_HOST_RE,
@@ -150,7 +151,7 @@ def enroll(request: Request, data: Any = Body(default=None), db: Session = Depen
 @router.get("/config")
 def config(request: Request, db: Session = Depends(get_db),
            probe: WachtlProbe = Depends(current_probe)) -> Response:
-    payload, etag = wachtl_service.config_payload(db, probe)
+    payload, etag = wachtl_service.config_payload(db, probe, request.url.hostname or "")
     if request.headers.get("if-none-match", "").strip().strip('"') == etag:
         return Response(status_code=304, headers={"ETag": f'"{etag}"'})
     return JSONResponse(payload, headers={"ETag": f'"{etag}"'})
@@ -162,11 +163,12 @@ def _ingest(probe_id: int, full_id: str, body: str, ip: str) -> JSONResponse | R
             return Response(status_code=204)
         probe = db.get(WachtlProbe, probe_id)
         assert probe is not None
-        check_ids = {c.id for c in wachtl_service.checks_for_probe(db, probe)}
-        result = parse_ingest(body, check_ids, int(time.time() * 1000))
+        checks = {c.id: c.type for c in wachtl_service.checks_for_probe(db, probe)}
+        result = parse_ingest(body, checks, int(time.time() * 1000))
         if result.rejected:
             log.info("Probe %s: %d Zeilen verworfen %s", probe_id, result.rejected, result.reasons)
         wachtl_service.store_buckets(db, probe_id, result.buckets)
+        wachtl_measure.store_hop_buckets(db, probe_id, result.hop_buckets)
         db.add(WachtlIngestBatch(batch_id=full_id, probe_id=probe_id))
         probe.last_seen = utcnow()
         probe.last_ip = ip
@@ -225,10 +227,10 @@ def heartbeat(request: Request, data: Any = Body(default=None), db: Session = De
     probe.buffer_items = _int("buffer_items")
     probe.uptime_s = uptime
     probe.addresses_json = json.dumps(_addresses(data.get("addresses")))
-    _, etag = wachtl_service.config_payload(db, probe)
+    _, etag = wachtl_service.config_payload(db, probe, request.url.hostname or "")
+    commands = wachtl_measure.take_commands(db, probe.id)
     db.commit()
-    # Aufträge ("Jetzt messen") gibt es in Phase 1 noch nicht.
-    return JSONResponse({"config_etag": etag, "server_time": int(time.time()), "commands": []})
+    return JSONResponse({"config_etag": etag, "server_time": int(time.time()), "commands": commands})
 
 
 @router.post("/deregister", status_code=204)
@@ -290,3 +292,51 @@ def findings(data: Any = Body(default=None), db: Session = Depends(get_db),
         log.warning("Probe %s: Hinweis abgelehnt – %s", probe.hostname, e)
     db.commit()
     return JSONResponse({"stored": len(items), "new": new, "rejected": len(errors), "errors": errors[:10]})
+
+
+def _result_check(db: Session, probe: WachtlProbe, data, types: tuple[str, ...]):
+    if not isinstance(data, dict):
+        raise WachtlApiError(400, "JSON-Objekt erwartet")
+    check = wachtl_measure.own_check(db, probe, data.get("check_id"), types)
+    if check is None:
+        raise WachtlApiError(422, "check_id gehört nicht zu dieser Probe")
+    return check
+
+
+@router.post("/results/path", status_code=201)
+def result_path(data: Any = Body(default=None), db: Session = Depends(get_db),
+                probe: WachtlProbe = Depends(current_probe)) -> JSONResponse:
+    """Ermittelter Pfad (Traceroute) eines Pfad-Checks; Pfadwechsel wird als Ereignis vermerkt."""
+    check = _result_check(db, probe, data, ("path",))
+    try:
+        changed = wachtl_measure.store_path(db, probe, check, data, int(time.time()))
+    except wachtl_results.ResultError as exc:
+        raise WachtlApiError(400, str(exc)) from exc
+    db.commit()
+    return JSONResponse({"changed": changed}, status_code=201)
+
+
+@router.post("/results/bandwidth", status_code=201)
+def result_bandwidth(data: Any = Body(default=None), db: Session = Depends(get_db),
+                     probe: WachtlProbe = Depends(current_probe)) -> JSONResponse:
+    """Bandbreitenmessung (iperf3 oder WAN) je Richtung."""
+    check = _result_check(db, probe, data, ("iperf", "speedtest"))
+    try:
+        stored = wachtl_measure.store_bandwidth(db, probe, check, data, int(time.time()))
+    except wachtl_results.ResultError as exc:
+        raise WachtlApiError(400, str(exc)) from exc
+    db.commit()
+    return JSONResponse({"stored": stored}, status_code=201)
+
+
+@router.post("/results/rtp", status_code=201)
+def result_rtp(data: Any = Body(default=None), db: Session = Depends(get_db),
+               probe: WachtlProbe = Depends(current_probe)) -> JSONResponse:
+    """Ergebnis eines Sprachtests (RTP) mit MOS."""
+    check = _result_check(db, probe, data, ("rtp",))
+    try:
+        wachtl_measure.store_rtp(db, probe, check, data, int(time.time()))
+    except wachtl_results.ResultError as exc:
+        raise WachtlApiError(400, str(exc)) from exc
+    db.commit()
+    return JSONResponse({"stored": 1}, status_code=201)

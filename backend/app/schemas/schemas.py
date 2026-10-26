@@ -779,10 +779,19 @@ class WachtlSettingsOut(BaseModel):
     pin_error: str | None
     server_urls: list[str]
     min_interval_s: int
+    rtp_enabled: bool
+    rtp_port: int
+    rtp_running: bool
+    rtp_error: str | None
+    iperf_running: bool
+    iperf_port: int
+    peer_host: str
 
 
 class WachtlSettingsUpdate(BaseModel):
-    enabled: bool
+    enabled: bool | None = None
+    rtp_enabled: bool | None = None
+    rtp_port: int | None = Field(default=None, ge=1024, le=65535)
 
 
 class WachtlSiteCreate(BaseModel):
@@ -821,10 +830,17 @@ class WachtlTokenCreated(WachtlTokenOut):
     token: str
 
 
+WACHTL_CHECK_TYPE_PATTERN = "^(ping|path|iperf|speedtest|rtp)$"
+
+
 class WachtlCheckBase(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    target: str = Field(min_length=1, max_length=255)
+    type: str = Field(default="ping", pattern=WACHTL_CHECK_TYPE_PATTERN)
+    # Nur bei Ping/Pfad; bei geplanten Messungen ergibt sich das Ziel aus den Parametern.
+    target: str = Field(default="", max_length=255)
     role: str = Field(default="target", pattern="^(target|gateway|reference)$")
+    # Typ-spezifische Einstellungen (app.services.wachtl_checktypes)
+    params: dict = Field(default_factory=dict)
     interval_s: int = Field(default=5, ge=1, le=3600)
     timeout_ms: int = Field(default=1000, ge=100, le=10000)
     site_id: int | None = None
@@ -843,9 +859,10 @@ class WachtlCheckUpdate(BaseModel):
     timeout_ms: int | None = Field(default=None, ge=100, le=10000)
     site_id: int | None = None
     enabled: bool | None = None
+    params: dict | None = None
 
 
-class WachtlCheckOut(ORMModel):
+class WachtlCheckOut(BaseModel):
     id: int
     name: str
     type: str
@@ -856,6 +873,8 @@ class WachtlCheckOut(ORMModel):
     site_id: int | None
     enabled: bool
     created_at: datetime
+    params: dict
+    summary: str
 
 
 class WachtlProbeOut(BaseModel):
@@ -874,10 +893,13 @@ class WachtlProbeOut(BaseModel):
     uptime_s: int
     addresses: list[str]
     deregistered_at: datetime | None
+    peer_enabled: bool
 
 
 class WachtlProbeUpdate(BaseModel):
-    status: str = Field(pattern="^(active|disabled)$")
+    status: str | None = Field(default=None, pattern="^(active|disabled)$")
+    # Gegenstelle für iperf3-/Sprachtests anderer Probes
+    peer_enabled: bool | None = None
 
 
 class WachtlSeriesPoint(PingSeriesPoint):
@@ -891,6 +913,8 @@ class WachtlCell(BaseModel):
     rtt_avg: float | None
     jitter_ms: float | None
     count: int
+    # Anzeige für Pfad/Bandbreite/Sprache (letzte Messung)
+    text: str | None = None
 
 
 class WachtlMatrixProbe(BaseModel):
@@ -907,6 +931,7 @@ class WachtlMatrixCheck(BaseModel):
     name: str
     target: str
     role: str
+    type: str
 
 
 class WachtlMatrixSite(BaseModel):
@@ -990,3 +1015,97 @@ class WachtlIncidentOut(BaseModel):
 class WachtlDiagnoseStarted(BaseModel):
     started: bool
     targets: list[str]
+
+
+class WachtlHopRow(BaseModel):
+    hop: int
+    ip: str
+    alt_ips: list[str]
+    count: int
+    loss: int
+    loss_pct: float | None
+    rtt_avg: float | None
+    rtt_min: float | None
+    rtt_max: float | None
+    jitter_ms: float | None
+    verdict: str
+    verdict_label: str
+
+
+class WachtlPathRunOut(BaseModel):
+    id: int
+    first_ts: datetime
+    ts: datetime
+    reason: str | None
+    reached: bool
+    changed: bool
+    hops: list[dict]
+
+
+class WachtlPathView(BaseModel):
+    current: WachtlPathRunOut | None
+    history: list[WachtlPathRunOut]
+    hops: list[WachtlHopRow]
+
+
+class WachtlBandwidthRunOut(ORMModel):
+    id: int
+    ts: datetime
+    kind: str
+    direction: str
+    peer: str | None
+    protocol: str | None
+    mbps: float | None
+    jitter_ms: float | None
+    loss_pct: float | None
+    retransmits: int | None
+    latency_ms: float | None
+    duration_s: float | None
+    trigger: str
+    error: str | None
+
+
+class WachtlRtpRunOut(ORMModel):
+    id: int
+    ts: datetime
+    peer: str | None
+    codec: str | None
+    ptime_ms: int | None
+    duration_s: float | None
+    mode: str | None
+    sent: int | None
+    received: int | None
+    rtt_ms: float | None
+    rtt_max_ms: float | None
+    loss_pct: float | None
+    up_loss_pct: float | None
+    down_loss_pct: float | None
+    jitter_ms: float | None
+    up_jitter_ms: float | None
+    down_jitter_ms: float | None
+    out_of_order: int | None
+    r_factor: float | None
+    mos: float | None
+    trigger: str
+    error: str | None
+
+
+class WachtlEventOut(BaseModel):
+    id: int
+    ts: datetime
+    site_id: int
+    site_name: str
+    probe_id: int | None
+    probe_hostname: str | None
+    check_id: int | None
+    kind: str
+    severity: str
+    title: str
+    detail: str | None
+    notified_at: datetime | None
+
+
+class WachtlCommandOut(BaseModel):
+    id: int
+    type: str
+    check_id: int | None

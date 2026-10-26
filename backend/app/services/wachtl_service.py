@@ -30,16 +30,13 @@ from app.models.wachtl import (
     WachtlSample,
     WachtlSite,
 )
-from app.services import kvstore, wachtl_analysis
+from app.services import kvstore, wachtl_analysis, wachtl_measure
 from app.services.wachtl_ingest import BUCKET_S, Bucket, classify_check, merge_bucket, spki_pin_from_pem
 
 log = get_logger("netprobe.wachtl")
 
 KV_ENABLED = "wachtl_enabled"
-CHECK_TYPES = ("ping",)
 ROLES = ("target", "gateway", "reference")
-# Standardwerte der Ping-Parameter wie in Wachtl (checktypes.py)
-PING_PARAM_DEFAULTS = {"size_bytes": 32, "ttl": 128, "jitter_window_s": 60}
 HOUR_S = 3600
 # Zeitraum, aus dem der aktuelle Zustand eines Checks bewertet wird
 STATUS_WINDOW_S = 300
@@ -85,36 +82,20 @@ def checks_for_probe(db: Session, probe: WachtlProbe) -> list[WachtlCheck]:
     ).scalars())
 
 
-def check_params(check: WachtlCheck) -> dict:
-    try:
-        stored = json.loads(check.params_json or "{}")
-    except json.JSONDecodeError:
-        stored = {}
-    params = dict(PING_PARAM_DEFAULTS)
-    params.update({k: v for k, v in stored.items() if k in PING_PARAM_DEFAULTS})
-    return params
+def config_payload(db: Session, probe: WachtlProbe, host: str = "") -> tuple[dict, str]:
+    """Konfiguration im Format von Wachtl ``GET /api/probe/v1/config`` und ihr ETag.
 
-
-def config_payload(db: Session, probe: WachtlProbe) -> tuple[dict, str]:
-    """Konfiguration im Format von Wachtl ``GET /api/probe/v1/config`` und ihr ETag."""
-    checks = [
-        {
-            "id": c.id,
-            "type": c.type,
-            "target": c.target,
-            "role": c.role,
-            "interval_s": c.interval_s,
-            "timeout_ms": min(c.timeout_ms, c.interval_s * 1000),
-            "params": check_params(c),
-        }
-        for c in checks_for_probe(db, probe)
-    ]
+    ``host``: Adresse, unter der die Probe netprobe erreicht hat – Gegenstelle für iperf3/RTP, wenn
+    ``wachtl_peer_host`` nicht gesetzt ist. Der Zustand der Gegenstellen geht ins ETag ein, die Probe
+    holt die Konfiguration also neu, sobald z. B. der iperf3-Server gestartet wird.
+    """
+    peer = wachtl_measure.peer_host(host)
     payload = {
         "probe_id": probe.id,
-        "checks": checks,
-        # iperf3-Gegenstelle und RTP-Reflektor folgen in Phase 3.
-        "iperf_server": {"enabled": False, "port": settings.iperf3_server_port},
-        "rtp_reflector": {"enabled": False, "port": 5004},
+        "checks": [wachtl_measure.config_check(db, probe, c, peer) for c in checks_for_probe(db, probe)],
+        # Gegenstelle für Tests anderer Probes (iperf3-Server und RTP-Reflektor auf dem PC)
+        "iperf_server": {"enabled": probe.peer_enabled, "port": wachtl_measure.PROBE_IPERF_PORT},
+        "rtp_reflector": {"enabled": probe.peer_enabled, "port": wachtl_measure.PROBE_RTP_PORT},
         "server_urls": settings.wachtl_server_url_list,
         "upload_interval_s": settings.wachtl_upload_interval_s,
         "heartbeat_interval_s": settings.wachtl_heartbeat_interval_s,
@@ -199,6 +180,7 @@ def overview(db: Session) -> dict:
     sites = list(db.execute(select(WachtlSite).order_by(WachtlSite.name)).scalars())
     probes = list(db.execute(select(WachtlProbe).order_by(WachtlProbe.hostname)).scalars())
     checks = list(db.execute(select(WachtlCheck).order_by(WachtlCheck.id)).scalars())
+    measured = wachtl_measure.matrix_cells(db, checks)
     out_sites = []
     for s in sites:
         site_checks = [c for c in checks if c.enabled and c.site_id in (None, s.id)]
@@ -207,18 +189,25 @@ def overview(db: Session) -> dict:
             online = probe_online(p, now)
             cells = []
             for c in site_checks:
+                if c.type != "ping":
+                    m = measured.get((p.id, c.id))
+                    cells.append({"check_id": c.id, "state": m["state"] if m else "stale",
+                                  "text": m["text"] if m else None, "loss_pct": None, "rtt_avg": None,
+                                  "jitter_ms": None, "count": 0})
+                    continue
                 st = stats.get((p.id, c.id))
                 state = st["state"] if st else "stale"
                 if not online and p.status == "active":
                     state = "stale"
-                cells.append({"check_id": c.id, "state": state, **({k: st[k] for k in (
+                cells.append({"check_id": c.id, "state": state, "text": None, **({k: st[k] for k in (
                     "loss_pct", "rtt_avg", "jitter_ms", "count")} if st else {
                     "loss_pct": None, "rtt_avg": None, "jitter_ms": None, "count": 0})})
             out_probes.append({"probe_id": p.id, "hostname": p.hostname, "online": online,
                                "status": p.status, "last_seen": p.last_seen, "cells": cells})
         out_sites.append({
             "site_id": s.id, "name": s.name,
-            "checks": [{"id": c.id, "name": c.name, "target": c.target, "role": c.role} for c in site_checks],
+            "checks": [{"id": c.id, "name": c.name, "target": c.target, "role": c.role, "type": c.type}
+                       for c in site_checks],
             "probes": out_probes,
         })
     return {"sites": out_sites, "window_s": STATUS_WINDOW_S}
@@ -309,6 +298,7 @@ def rollup_and_prune() -> None:
         if groups or n_hour or n_batch:
             log.info("Wachtl: %d Stunden-Buckets verdichtet (%d Minuten-Buckets), %d alte Buckets, "
                      "%d Batch-IDs gelöscht", len(groups), n_min, n_hour, n_batch)
+    wachtl_measure.rollup_and_prune()
     n_rep, n_find = prune_events()
     if n_rep or n_find:
         log.info("Wachtl: %d Meldungen, %d behobene Hinweise gelöscht", n_rep, n_find)
@@ -408,7 +398,7 @@ def incidents(db: Session, since: datetime, until: datetime, site_id: int | None
     if site_id is not None:
         q_sites = q_sites.where(WachtlSite.id == site_id)
     sites = list(db.execute(q_sites).scalars())
-    checks = [c for c in db.execute(select(WachtlCheck)).scalars() if c.enabled]
+    checks = [c for c in db.execute(select(WachtlCheck)).scalars() if c.enabled and c.type == "ping"]
     probes = list(db.execute(select(WachtlProbe)).scalars())
     out: list[dict] = []
     for s in sites:
@@ -451,7 +441,9 @@ def diagnose_targets(db: Session, probe: WachtlProbe) -> list[dict]:
     Standort-Routers sein), sonst ``last_ip``."""
     targets: list[dict] = []
     for c in checks_for_probe(db, probe):
-        if c.target != "gateway" and c.role != "gateway" and all(t["host"] != c.target for t in targets):
+        if c.type not in ("ping", "path") or c.target == "gateway" or c.role == "gateway":
+            continue
+        if all(t["host"] != c.target for t in targets):
             targets.append({"name": c.name, "host": c.target})
     try:
         reported = [str(a) for a in json.loads(probe.addresses_json or "[]")]

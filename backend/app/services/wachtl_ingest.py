@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import math
 import re
 import zlib
@@ -23,6 +24,11 @@ PING_RTT = "wachtl_ping_rtt_ms"
 PING_TTL = "wachtl_ping_ttl"
 PING_JITTER = "wachtl_ping_jitter_ms"
 ALLOWED_METRICS = frozenset({PING_UP, PING_RTT, PING_TTL, PING_JITTER})
+HOP_UP = "wachtl_hop_up"
+HOP_RTT = "wachtl_hop_rtt_ms"
+HOP_JITTER = "wachtl_hop_jitter_ms"
+HOP_METRICS = frozenset({HOP_UP, HOP_RTT, HOP_JITTER})
+MAX_HOPS = 64
 
 MAX_AGE_MS = 8 * 86400 * 1000      # Puffer der Probe hält 7 Tage
 MAX_FUTURE_MS = 5 * 60 * 1000      # Uhrabweichung
@@ -65,6 +71,8 @@ class Bucket:
 class IngestResult:
     # Schlüssel: (check_id, Bucket-Beginn in Unix-Sekunden)
     buckets: dict[tuple[int, int], Bucket] = field(default_factory=dict)
+    # Hop-Pings eines Pfad-Checks: (check_id, hop, hop_ip, Bucket-Beginn)
+    hop_buckets: dict[tuple[int, int, str, int], Bucket] = field(default_factory=dict)
     accepted: int = 0
     reasons: dict[str, int] = field(default_factory=dict)
 
@@ -85,8 +93,12 @@ def decompress_gzip(raw: bytes, max_bytes: int) -> bytes:
     return out
 
 
-def parse_ingest(body: str, check_ids: set[int], now_ms: int) -> IngestResult:
-    """Zeilen prüfen und zu Buckets verdichten. Unbekannte Checks/Metriken werden gezählt verworfen."""
+def parse_ingest(body: str, checks: dict[int, str], now_ms: int) -> IngestResult:
+    """Zeilen prüfen und zu Buckets verdichten. Unbekannte Checks/Metriken werden gezählt verworfen.
+
+    :param checks: zugewiesene Checks der Probe, check_id → Typ. Ping-Metriken nur für ``ping``-Checks,
+        Hop-Metriken (mit ``hop``/``hop_ip``) nur für ``path``-Checks – wie Wachtl ``ingest.process``.
+    """
     res = IngestResult()
 
     def reject(reason: str) -> None:
@@ -101,13 +113,23 @@ def parse_ingest(body: str, check_ids: set[int], now_ms: int) -> IngestResult:
             reject("format")
             continue
         name, label_str, value_str, ts_str = m.groups()
-        if name not in ALLOWED_METRICS:
+        if name not in ALLOWED_METRICS and name not in HOP_METRICS:
             reject("metric")
             continue
         labels = dict(_LABEL_RE.findall(label_str))
         cid_str = labels.get("check_id", "")
-        if not (cid_str.isascii() and cid_str.isdigit()) or int(cid_str) not in check_ids:
+        if not (cid_str.isascii() and cid_str.isdigit()) or int(cid_str) not in checks:
             reject("check_id")
+            continue
+        cid = int(cid_str)
+        hop_key: tuple[int, str] | None = None
+        if name in HOP_METRICS:
+            hop_key = _valid_hop(labels) if checks[cid] == "path" else None
+            if hop_key is None:
+                reject("hop")
+                continue
+        elif checks[cid] != "ping":
+            reject("metric")
             continue
         try:
             value = float(value_str)
@@ -124,20 +146,26 @@ def parse_ingest(body: str, check_ids: set[int], now_ms: int) -> IngestResult:
             reject("timestamp")
             continue
 
-        key = (int(cid_str), (ts // 1000) // BUCKET_S * BUCKET_S)
-        b = res.buckets.get(key)
-        if b is None:
-            b = res.buckets[key] = Bucket()
-        if name == PING_UP:
+        minute = (ts // 1000) // BUCKET_S * BUCKET_S
+        if hop_key is not None:
+            hkey = (cid, hop_key[0], hop_key[1], minute)
+            b = res.hop_buckets.get(hkey)
+            if b is None:
+                b = res.hop_buckets[hkey] = Bucket()
+        else:
+            b = res.buckets.get((cid, minute))
+            if b is None:
+                b = res.buckets[(cid, minute)] = Bucket()
+        if name in (PING_UP, HOP_UP):
             b.count += 1
             if value < 0.5:
                 b.loss += 1
-        elif name == PING_RTT:
+        elif name in (PING_RTT, HOP_RTT):
             if not 0 <= value <= MAX_RTT_MS:
                 reject("value")
                 continue
             b.add_rtt(value)
-        elif name == PING_JITTER:
+        elif name in (PING_JITTER, HOP_JITTER):
             if not 0 <= value <= MAX_RTT_MS:
                 reject("value")
                 continue
@@ -150,6 +178,15 @@ def parse_ingest(body: str, check_ids: set[int], now_ms: int) -> IngestResult:
             b.ttl = int(value)
         res.accepted += 1
     return res
+
+
+def _valid_hop(labels: dict[str, str]) -> tuple[int, str] | None:
+    try:
+        hop = int(labels.get("hop", ""))
+        hop_ip = str(ipaddress.ip_address(labels.get("hop_ip", "")))
+    except ValueError:
+        return None
+    return (hop, hop_ip) if 1 <= hop <= MAX_HOPS else None
 
 
 def merge_bucket(row, b: Bucket) -> None:

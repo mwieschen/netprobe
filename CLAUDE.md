@@ -294,7 +294,18 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
   and minute: lan/wan/target/probe-gap; all ≥2 probes of a site same cause → one site incident; minutes merged
   into episodes with ≤2 clean minutes in between, dominant cause wins) — computed on request, not stored. A new
   report starts `wachtl_service.start_diagnostics()` in a daemon thread (reuses `diagnostics_service`
-  ping/mtu/traceroute, per-site cooldown, run id stored on the report). Phases 3–4: `docs/wachtl-zentrale.md`.
+  ping/mtu/traceroute, per-site cooldown, run id stored on the report). Phase 3: check types path/iperf/
+  speedtest/rtp — single source of fields/defaults in the pure `wachtl_checktypes.py` (mirrors Wachtl's
+  `checktypes.py`; the UI form is generated from `GET /api/clients/check-types`; a key *missing* from the input
+  gets its default, an empty one stays empty). `wachtl_measure.py` holds the DB side: `/config` peers
+  (`peer: server` → `iperf3_server`/`rtp_reflector`, `probe` → that probe's reported address if
+  `peer_enabled`; peer state is part of the ETag), hop buckets (`wachtl_hop_samples`, same 1-min → 1-h rollup),
+  `results/*` storage, heartbeat commands (`run_check`/`retrace`), `matrix_cells`, `hop_table` → pure
+  `wachtl_results.evaluate_hops` (ICMP rate limiting vs. real loss vs. latency jump). Discrete happenings
+  (path change, bandwidth/MOS below threshold, errors) go to `WachtlEvent` with `notified_at` — the source for
+  Phase 4 notifications; outages stay computed (`wachtl_analysis`). `rtp_reflector.py` is a protocol-compatible,
+  rate-limited UDP reflector (asyncio endpoint in-process, `resume()` in the lifespan, KV on/off+port; tests
+  disable it via `NETPROBE_WACHTL_RTP_ENABLED=false` in conftest). Phase 4: `docs/wachtl-zentrale.md`.
 - Every new external-tool call keeps the `proc.py` discipline (arg list, `--` separator,
   host regex, no leading `-`). Use the shared `proc.validate_network_target()` for new host
   inputs. `iperf3` is added to the installer's apt list; the optional

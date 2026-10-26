@@ -1,6 +1,7 @@
 # netprobe als Zentrale für Wachtl-Clients
 
-Stand: 2026-10-23 · Phase 1 (Ping) und Phase 2 (Meldungen, Hinweise, Ausfallanalyse, Diagnose) umgesetzt
+Stand: 2026-10-23 · Phase 1 (Ping), Phase 2 (Meldungen, Hinweise, Ausfallanalyse, Diagnose) und Phase 3
+(Pfad, Bandbreite, Sprache) umgesetzt; Phase 4 (Benachrichtigung) in Arbeit
 
 ## Ziel
 
@@ -52,15 +53,15 @@ Die Probes übernehmen die Liste per `/config`.
 | Endpunkt | Stand | Bemerkung |
 | --- | --- | --- |
 | `POST /enroll` | ✅ Phase 1 | Enrollment-Token → `{probe_id, token, site_name}`; Token `<probe_id>.<secret>`, nur Hash gespeichert |
-| `GET /config` | ✅ Phase 1 | ETag/304; nur Ping-Checks; `client_findings` an (Phase 2), iperf3-Gegenstelle und RTP-Reflektor aus |
-| `POST /ingest` | ✅ Phase 1 | Prometheus-Text (gzip), `X-Batch-Id` idempotent (9 Tage); `wachtl_ping_up/rtt_ms/ttl/jitter_ms` |
-| `POST /heartbeat` | ✅ Phase 1 | online/offline, Version, Puffer, Adressen; `commands` immer leer; Dienst-Neustart (Uptime kleiner) schließt alte aktive Hinweise |
+| `GET /config` | ✅ Phase 1–3 | ETag/304; alle Check-Typen mit `peer` (Gegenstelle), `iperf_server`/`rtp_reflector` je Probe, `client_findings` |
+| `POST /ingest` | ✅ Phase 1/3 | Prometheus-Text (gzip), `X-Batch-Id` idempotent (9 Tage); `wachtl_ping_*` für Ping-, `wachtl_hop_*` (mit `hop`/`hop_ip`) für Pfad-Checks |
+| `POST /heartbeat` | ✅ Phase 1–3 | online/offline, Version, Puffer, Adressen; `commands` = offene Aufträge (`run_check`/`retrace`, 1 h gültig); Dienst-Neustart schließt alte aktive Hinweise |
 | `POST /deregister` | ✅ Phase 1 | Token sofort ungültig, Messwerte bleiben |
 | `POST /report` | ✅ Phase 2 | Störungsmeldung vom Tray; 201 neu / 200 dieselbe `report_id`; startet optional eine Diagnose |
 | `POST /findings` | ✅ Phase 2 | Client-Hinweise (Kabel, Link, Treiber), Upsert je `finding_id`, höchstens 50 je Sendung |
-| `POST /results/path` | Phase 3 | Traceroute/Hops, Pfadwechsel |
-| `POST /results/bandwidth` | Phase 3 | iperf3/HTTP-Speedtest |
-| `POST /results/rtp` | Phase 3 | Sprachtest (MOS); Reflektor auf netprobe nötig |
+| `POST /results/path` | ✅ Phase 3 | Traceroute; gleicher Pfad schreibt die letzte Zeile fort, Wechsel (stille Hops zählen nicht) → Ereignis |
+| `POST /results/bandwidth` | ✅ Phase 3 | iperf3/WAN je Richtung; unter Schwellwert oder Fehler → Ereignis |
+| `POST /results/rtp` | ✅ Phase 3 | Sprachtest mit MOS; unter `min_mos` oder Fehler → Ereignis |
 
 Validierung, Kategorien und Texte wie Wachtl (`app/services/wachtl_events.py`). Ein behobener Hinweis wird durch
 eine ältere Nachlieferung nicht wieder aktiv; beim Beheben bleiben Problem und Lösungsvorschlag stehen.
@@ -113,9 +114,39 @@ Meldungen erscheinen auf der Clients-Seite (offen/alle, „Erledigt“ mit Notiz
 im Graphen des PCs. Meldungen und behobene Hinweise werden nach `NETPROBE_WACHTL_EVENT_RETENTION_DAYS` (365)
 gelöscht.
 
+## Pfad, Bandbreite und Sprache (Phase 3)
+
+Check-Typen wie in Wachtl, Felder und Standardwerte an einer Stelle (`app/services/wachtl_checktypes.py`,
+`GET /api/clients/check-types`); das Formular im UI entsteht daraus.
+
+| Typ | Messung | Ansicht |
+| --- | --- | --- |
+| **Pfad** | Traceroute alle `trace_interval_min`, Dauerpings auf jeden Hop (`interval_s`) | MTR-Tabelle mit Bewertung, Pfadverlauf |
+| **Bandbreite intern** | iperf3 zu netprobe, zu einem anderen PC oder eigenem Server | Durchsatz-Graph, Messungen |
+| **Bandbreite WAN** | HTTP-Download/-Upload (Standard: Cloudflare) oder iperf3 im Internet | wie oben |
+| **Sprache** | RTP-Strom wie ein Telefonat (G.711/G.729) zu einem Reflektor, MOS nach E-Modell | MOS-Graph, Tests |
+
+- **MTR-Bewertung** (`wachtl_results.evaluate_hops`): Verlust nur an einem Hop, spätere Hops deutlich weniger →
+  *ICMP-Drosselung* (kein Problem); Verlust, der bis zum Ziel bleibt → *Verlust beginnt hier* (und *Folge* für die
+  späteren Hops); Laufzeit springt um > 30 ms und bleibt → *Laufzeit steigt hier*. Hop-Pings werden wie Pings zu
+  1-min-/1-h-Buckets verdichtet (`wachtl_hop_samples`).
+- **Gegenstellen**: „netprobe“ = vorhandener iperf3-Server (Seite *iperf3*) bzw. der **RTP-Reflektor**
+  (`app/services/rtp_reflector.py`, UDP 5004, an/aus unter *Clients → Einrichtung*). Der Reflektor antwortet nur
+  auf Wachtl-RTP-Pakete, in gleicher Größe, mit Ratenbegrenzung (2000 Pakete/s je Absender, 20 000 gesamt) –
+  kein Verstärker. Adresse für die Probes: `NETPROBE_WACHTL_PEER_HOST`, sonst der Host, über den die Probe
+  netprobe erreicht. „andere Probe“: den PC unter *Probes → Gegenstelle* freigeben (iperf3 5201/RTP 5004 auf dem PC).
+  **Firewall**: TCP 5201 und UDP 5004 von den Client-Netzen zu netprobe freigeben – `install.sh` öffnet diese
+  Ports nicht selbst.
+- **Zeitplan** je Check (alle N min, Versatz je PC automatisch verteilt, Zeitfenster, Wochentage); „Jetzt messen“
+  bzw. „Pfad neu ermitteln“ geht mit dem nächsten Heartbeat (≤ 30 s) an den PC.
+- **Ereignisse** (Tabelle `wachtl_events`): Pfadwechsel, Ziel beim Traceroute nicht erreicht,
+  Bandbreite unter Schwellwert, Bandbreiten-/Sprachtest fehlgeschlagen, MOS unter `min_mos` (unter 3,1 kritisch).
+  `notified_at` ist für die Benachrichtigung (Phase 4) vorgesehen.
+- Ausfallanalyse und Matrix-Ampel für Ping bleiben unverändert; Pfad/Bandbreite/Sprache zeigen in der Matrix die
+  letzte Messung (7 Tage). Ergebnisse werden `NETPROBE_WACHTL_RESULT_RETENTION_DAYS` (365) aufbewahrt.
+
 ## Nächste Phasen
 
-**Phase 3 – Weitere Check-Arten**: Pfad, Bandbreite (iperf3-Gegenstelle = vorhandener `iperf3_server`), RTP.
 
 **Phase 4 – Benachrichtigung** (offen): E-Mail/Teams würde das Prinzip „keine ausgehenden Webhooks/Mails“
 aufheben – nur opt-in, nur an selbst konfigurierte Ziele.
