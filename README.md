@@ -10,6 +10,9 @@ durch und ermöglicht sichere Packet Captures mit Basisanalyse – alles lokal,
 > (Python 3.12–3.14). Frontend: React 19 + TypeScript + Vite 7 + ECharts, gebaut mit
 > Node.js ≥ 20 (LTS 24 empfohlen). Zeitzone: intern UTC, Anzeige Europe/Berlin.
 
+> **Schnellstart mit Wachtl-Clients:** [`ANLEITUNG.md`](ANLEITUNG.md) – Server installieren, netprobe
+> einrichten, Wachtl-Setup (im Release-Paket enthalten) auf die Windows-PCs verteilen.
+
 ---
 
 ## Funktionsumfang

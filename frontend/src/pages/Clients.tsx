@@ -31,9 +31,9 @@ const STATE_CLASS = { ok: "ok", warn: "warn", down: "err", stale: "dim" } as con
 const STATE_LABEL = { ok: "OK", warn: "auffällig", down: "gestört", stale: "keine Daten" } as const;
 
 // Unbeaufsichtigte Installation (GPO/Intune) mit dem unveränderten Wachtl-Setup.
-export function setupCommand(servers: string[], pin: string | null, token: string): string {
+export function setupCommand(servers: string[], pin: string | null, token: string, setupFile?: string): string {
   const server = (servers.length ? servers : [`https://${window.location.hostname}`]).join(",");
-  return `WachtlSetup-0.9.2.exe /VERYSILENT /SUPPRESSMSGBOXES /Server=${server} /Pin="${pin ?? "<PIN>"}" /Token=${token}`;
+  return `${setupFile ?? "WachtlSetup-<Version>.exe"} /VERYSILENT /SUPPRESSMSGBOXES /Server=${server} /Pin="${pin ?? "<PIN>"}" /Token=${token}`;
 }
 
 export default function ClientsPage() {
@@ -206,6 +206,25 @@ export default function ClientsPage() {
       {isAdmin && cfg && (
         <div className="card" style={{ marginBottom: 16 }}>
           <h2>Einrichtung</h2>
+          <div className="field">
+            <label>Wachtl-Setup für die PCs (unverändert, im netprobe-Release enthalten)</label>
+            {cfg.setup ? (
+              <>
+                <div className="row">
+                  <a className="badge ok" href="/api/clients/setup" download={cfg.setup.filename}>
+                    {cfg.setup.filename} herunterladen
+                  </a>
+                  <span className="muted">Wachtl {cfg.setup.version} · {fmtNum(cfg.setup.size / 1048576, 1)} MB</span>
+                </div>
+                {cfg.setup.sha256 && <div className="codeblock" style={{ fontSize: 12 }}>SHA256 {cfg.setup.sha256}</div>}
+              </>
+            ) : (
+              <div className="error-box">
+                Kein Wachtl-Setup installiert – netprobe aus dem Release-Paket (netprobe.tar.gz) installieren
+                oder das Setup aus github.com/fkroczak/Wachtl (releases/) verwenden.
+              </div>
+            )}
+          </div>
           <div className="field">
             <label>SPKI-Pin des Server-Zertifikats</label>
             {cfg.pin ? <div className="codeblock">{cfg.pin}</div> : <div className="error-box">{cfg.pin_error}</div>}
@@ -415,7 +434,7 @@ export default function ClientsPage() {
           <div className="field"><label>Token</label><div className="codeblock">{created.token}</div></div>
           <div className="field">
             <label>Unbeaufsichtigte Installation (als Administrator / Softwareverteilung)</label>
-            <div className="codeblock">{setupCommand(cfg.server_urls, cfg.pin, created.token)}</div>
+            <div className="codeblock">{setupCommand(cfg.server_urls, cfg.pin, created.token, cfg.setup?.filename)}</div>
           </div>
           {!cfg.pin && <div className="error-box">{cfg.pin_error}</div>}
         </Modal>

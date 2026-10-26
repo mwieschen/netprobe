@@ -182,6 +182,9 @@ class Settings(BaseSettings):
     wachtl_enabled: bool = False
     # Zertifikat der nginx-HTTPS-Site; daraus wird der SPKI-Pin für das Setup berechnet.
     wachtl_tls_cert: Path = Path("/etc/netprobe/tls/fullchain.pem")
+    # Unverändertes Wachtl-Setup aus dem Release-Paket (install.sh legt es hier ab, Download unter
+    # /api/clients/setup). Inhalt: WachtlSetup-<Version>.exe, SHA256SUMS.txt, VERSION, LIESMICH.md, LICENSE.
+    wachtl_client_dir: Path = Path("/opt/netprobe/clients/wachtl")
     # Adressen, unter denen Probes netprobe erreichen (kommagetrennt, https://…); leer = keine Vorgabe.
     wachtl_server_urls: str = ""
     # Untergrenze für Check-Intervalle (Sekunden): 1-s-Pings vieler Clients sprengen SQLite.

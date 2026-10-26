@@ -568,6 +568,31 @@ deploy_backend() {
     ok "Backend-Code eingespielt."
 }
 
+# Wachtl-Setup für die Windows-PCs (nur im Release-Paket enthalten, clients/wachtl/). Unabhängig vom
+# Dienst: kein Neustart nötig, netprobe liest das Verzeichnis bei jedem Abruf. Fehlt es in der Quelle
+# (Repository-Checkout), bleibt ein bereits installiertes Setup unverändert.
+deploy_clients() {
+    local src="$SRC_DIR/clients/wachtl" dst="$APP_DIR/clients/wachtl"
+    if ! compgen -G "$src/WachtlSetup-*.exe" >/dev/null; then
+        compgen -G "$dst/WachtlSetup-*.exe" >/dev/null \
+            && ok "Wachtl-Setup: $(cat "$dst/VERSION" 2>/dev/null || echo '?') (unverändert, nicht im Paket)."
+        return 0
+    fi
+    if [ "$(_tree_md5 "$SRC_DIR" clients/wachtl)" = "$(_tree_md5 "$APP_DIR" clients/wachtl)" ]; then
+        ok "Wachtl-Setup $(cat "$src/VERSION" 2>/dev/null) ist aktuell."
+        return 0
+    fi
+    require_space "$APP_DIR" 200 "das Wachtl-Setup"
+    log "Spiele Wachtl-Setup $(cat "$src/VERSION" 2>/dev/null) nach ${dst} ein…"
+    mkdir -p "$APP_DIR/clients"
+    rm -rf "${dst}.new"
+    cp -r "$src" "${dst}.new"
+    rm -rf "$dst"
+    mv "${dst}.new" "$dst"
+    secure_app_dir
+    ok "Wachtl-Setup eingespielt (Download in netprobe unter Clients › Einrichtung)."
+}
+
 # Hält die installierte Version fest (nach erfolgreichem Lauf).
 record_version() {
     mkdir -p "$STATE_DIR"
@@ -1198,7 +1223,8 @@ backup_current_installation() {
     ts="$(date +%Y%m%d_%H%M%S)"
     db="$(_db_path)"
     [ -f "$db" ] && db_mb=$(( $(stat -c %s "$db") / 1048576 ))
-    [ -d "$APP_DIR" ] && app_mb="$(du -sm --exclude="$VENV_DIR" "$APP_DIR" 2>/dev/null | cut -f1)"
+    [ -d "$APP_DIR" ] && app_mb="$(du -sm --exclude="$VENV_DIR" --exclude="$APP_DIR/clients" "$APP_DIR" \
+        2>/dev/null | cut -f1)"
     require_space "$SNAPSHOT_ROOT" $(( db_mb + ${app_mb:-0} + 100 )) "den Snapshot"
 
     mkdir -p "$SNAPSHOT_ROOT"
@@ -1215,7 +1241,9 @@ backup_current_installation() {
         warn "Keine Datenbank unter ${db} – Snapshot ohne DB."
     fi
     if [ -d "$APP_DIR" ]; then
-        tar -czf "${SNAPSHOT_DIR}/app.tar.gz" -C / --exclude="${VENV_DIR#/}" "${APP_DIR#/}"
+        # Ohne venv und Wachtl-Setup (~80 MB, kommt mit jedem Release-Paket neu; Rollback lässt es liegen).
+        tar -czf "${SNAPSHOT_DIR}/app.tar.gz" -C / --exclude="${VENV_DIR#/}" \
+            --exclude="${APP_DIR#/}/clients" "${APP_DIR#/}"
     fi
     for f in "$ETC_DIR" /etc/systemd/system/netprobe.service /etc/systemd/system/netprobe-iperf3.service \
              /etc/nginx/sites-available/netprobe.conf /etc/logrotate.d/netprobe; do
@@ -1378,7 +1406,7 @@ setup_fresh_installation() {
     step "Benutzer und Verzeichnisse";       setup_user_dirs; seed_speedtest_license
     step "Konfiguration";                    setup_env
     step "Backend und Python-Umgebung";      deploy_backend; install_python_deps
-    step "Frontend";                         deploy_frontend
+    step "Frontend";                         deploy_frontend; deploy_clients
     step "Datenbank initialisieren (Alembic)"
     run_migrations || die "Datenbankmigration fehlgeschlagen. Details siehe oben."
     step "Admin-Benutzer";                   setup_admin
@@ -1444,6 +1472,7 @@ perform_smart_update() {
     if [ "$pending" -eq 0 ]; then
         ok "Code, Frontend, Abhängigkeiten und Datenbankschema sind aktuell."
         self_heal
+        deploy_clients
         smoke_tests || warn "Smoke-Tests nicht vollständig erfolgreich – siehe Hinweise oben."
         record_version
         install_self
@@ -1465,6 +1494,7 @@ perform_smart_update() {
         install_python_deps
     fi
     [ "$CHANGED_FRONTEND" -eq 1 ] && deploy_frontend
+    deploy_clients
 
     # Nach dem Einspielen erneut gegen die NEUEN heads prüfen.
     if [ "$MIGRATIONS_PENDING" -eq 1 ] || migrations_pending "$APP_DIR/backend"; then

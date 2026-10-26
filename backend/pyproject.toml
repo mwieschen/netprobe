@@ -1,6 +1,6 @@
 [project]
 name = "netprobe"
-version = "1.1.0"
+version = "1.1.1"
 description = "Lokale Web-Appliance für Netzwerk- und WAN-Monitoring"
 # Kein 'readme' hier: Die README liegt im Repo-Wurzelverzeichnis (außerhalb von
 # backend/) und neuere setuptools verbieten Pfade außerhalb des Paketverzeichnisses.

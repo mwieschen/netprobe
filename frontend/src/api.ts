@@ -782,6 +782,13 @@ export interface DashboardHealth {
 }
 
 // --- Wachtl-Clients (/api/clients) ---
+export interface WachtlClientSetup {
+  version: string;
+  filename: string;
+  sha256: string | null;
+  size: number;
+}
+
 export interface WachtlSettings {
   enabled: boolean;
   pin: string | null;
@@ -795,6 +802,7 @@ export interface WachtlSettings {
   iperf_running: boolean;
   iperf_port: number;
   peer_host: string;
+  setup: WachtlClientSetup | null;
 }
 
 export interface WachtlSite {
