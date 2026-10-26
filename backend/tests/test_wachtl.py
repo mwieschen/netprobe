@@ -319,3 +319,30 @@ def test_client_setup_download_for_viewer_not_anonymous(client, tmp_path, monkey
     login = client.post("/api/auth/login", json={"username": "leser", "password": "password123"})
     assert login.status_code == 200
     assert client.get("/api/clients/setup").content == b"MZ"
+
+
+# --- Vom Wachtl-Setup erwartete Routen außerhalb des Probe-API ---------------
+def test_healthz_for_setup_check(client):
+    # wachtl-probe.exe check: HTTP 2xx und "status" im Body, sonst „kein Wachtl-Server“
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    assert '"status"' in r.text
+    assert r.json()["status"] == "ok"
+
+
+def test_certificate_download_der(client, tmp_path, monkeypatch):
+    import base64
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "wachtl_tls_cert", tmp_path / "fehlt.pem")
+    assert client.get("/zertifikat/wachtl.crt").status_code == 404
+
+    cert = tmp_path / "fullchain.pem"
+    cert.write_text(TEST_CERT, encoding="ascii")
+    monkeypatch.setattr(settings, "wachtl_tls_cert", cert)
+    r = client.get("/zertifikat/wachtl.crt")
+    assert r.status_code == 200
+    body = "".join(TEST_CERT.strip().splitlines()[1:-1])
+    assert r.content == base64.b64decode(body)
+    assert r.content[0] == 0x30  # DER-SEQUENCE

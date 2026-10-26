@@ -205,6 +205,8 @@ Messereignisse – je eine Mail beim Beginn und bei der Erholung. Details: `docs
 | Symptom | Ursache und Lösung |
 | --- | --- |
 | Setup: „Das Server-Zertifikat passt nicht zum angegebenen Pin“ | Falscher Pin, oder ein Proxy/Firewall bricht TLS auf. Pin in netprobe prüfen, auf dem PC: `wachtl-probe.exe show-pin --server https://<server>`; TLS-Inspection für netprobe ausnehmen |
+| Setup: „Unter dieser Adresse antwortet kein Wachtl-Server“ | netprobe älter als 1.1.2 (ohne `/healthz`) → aktualisieren. Prüfen im Browser: `https://<server>/healthz` muss `{"status":"ok",…}` zeigen |
+| Setup: „Keine Verbindung zum Wachtl-Server“ / Zeitüberschreitung | TCP 443 vom PC zum Server gesperrt oder Name nicht auflösbar → Firewall prüfen, IP-Adresse als zweite Server-Adresse angeben |
 | Setup: „Server lehnt die Registrierung ab“ | Token abgelaufen, aufgebraucht oder widerrufen → neues Token in netprobe erzeugen |
 | PC erscheint nicht | *Anbindung aktiv* aus? TCP 443 vom PC zum Server gesperrt? Server-Adresse am Standort nicht auflösbar → IP zusätzlich in `NETPROBE_WACHTL_SERVER_URLS` |
 | PC „offline“, Puffer steigt | Server nicht erreichbar. Werte bleiben bis 7 Tage auf dem PC und werden nachgesendet |

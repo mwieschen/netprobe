@@ -5,10 +5,12 @@ Gemeinsam genutzt von der Probe-API (``app.api.wachtl_probe``) und der Admin-API
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import ipaddress
 import json
 import math
+import re
 import secrets
 import threading
 import time
@@ -70,6 +72,21 @@ def tls_pin() -> tuple[str | None, str | None]:
         return None, f"Zertifikat {path} nicht gefunden – HTTPS ist nicht eingerichtet (install.sh)."
     except (OSError, ValueError) as exc:
         return None, f"Zertifikat {path} nicht lesbar: {exc}"
+
+
+def tls_certificate_der() -> bytes | None:
+    """Erstes Zertifikat aus ``settings.wachtl_tls_cert`` als DER, None wenn fehlend/unlesbar."""
+    try:
+        pem = settings.wachtl_tls_cert.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    m = re.search(r"-----BEGIN CERTIFICATE-----(.+?)-----END CERTIFICATE-----", pem, re.S)
+    if not m:
+        return None
+    try:
+        return base64.b64decode("".join(m.group(1).split()), validate=True)
+    except ValueError:
+        return None
 
 
 def client_setup() -> dict | None:
