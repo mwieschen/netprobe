@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, get_current_user, require_admin
-from app.core.timeutils import utcnow
+from app.api.timerange import apply_range, resolve_range
 from app.db.session import get_db
 from app.models.ping import PingAggregate, PingJob, PingSample
 from app.models.user import User
-from app.schemas.schemas import PingJobCreate, PingJobOut, PingSampleOut, PingStats
-from app.services import audit
+from app.schemas.schemas import PingJobCreate, PingJobOut, PingSampleOut, PingSeriesPoint, PingStats
+from app.services import audit, ping_history
 from app.services.events import ping_broker
 from app.services.ping_manager import ping_manager
 
@@ -89,54 +87,58 @@ def delete_job(
 def job_samples(
     job_id: int,
     range: str = "1h",
+    start: str | None = None,
+    end: str | None = None,
     limit: int = 5000,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[PingSample]:
-    since = _range_to_since(range)
+    since, until = resolve_range(range, start, end, default="1h")
     q = select(PingSample).where(PingSample.job_id == job_id).order_by(PingSample.ts.desc())
-    if since is not None:
-        q = q.where(PingSample.ts >= since)
+    q = apply_range(q, PingSample.ts, since, until)
     return list(db.execute(q.limit(min(limit, 20000))).scalars().all())
+
+
+@router.get("/jobs/{job_id}/series", response_model=list[PingSeriesPoint])
+def job_series(
+    job_id: int,
+    range: str = "1h",
+    start: str | None = None,
+    end: str | None = None,
+    points: int = 1500,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[dict]:
+    """Diagramm-Zeitreihe über den gesamten Zeitraum (gebündelt, inkl. Aggregaten)."""
+    since, until = resolve_range(range, start, end, default="1h")
+    return ping_history.series(db, job_id, since, until, min(max(points, 50), 5000))
 
 
 @router.get("/jobs/{job_id}/stats", response_model=PingStats)
 def job_stats(
     job_id: int,
     range: str = "1h",
+    start: str | None = None,
+    end: str | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> PingStats:
-    since = _range_to_since(range)
-    q = select(PingSample).where(PingSample.job_id == job_id)
-    if since is not None:
-        q = q.where(PingSample.ts >= since)
-    samples = list(db.execute(q).scalars().all())
-    rtts = [s.rtt_ms for s in samples if s.ok and s.rtt_ms is not None]
-    loss = sum(1 for s in samples if not s.ok)
-    count = len(samples)
-    return PingStats(
-        job_id=job_id,
-        count=count,
-        loss=loss,
-        loss_pct=round(loss / count * 100, 2) if count else 0.0,
-        rtt_min=round(min(rtts), 3) if rtts else None,
-        rtt_avg=round(sum(rtts) / len(rtts), 3) if rtts else None,
-        rtt_max=round(max(rtts), 3) if rtts else None,
-    )
+    since, until = resolve_range(range, start, end, default="1h")
+    return PingStats(**ping_history.stats(db, job_id, since, until))
 
 
 @router.get("/jobs/{job_id}/aggregates")
 def job_aggregates(
     job_id: int,
     range: str = "7d",
+    start: str | None = None,
+    end: str | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[dict]:
-    since = _range_to_since(range)
+    since, until = resolve_range(range, start, end, default="7d")
     q = select(PingAggregate).where(PingAggregate.job_id == job_id).order_by(PingAggregate.bucket_ts)
-    if since is not None:
-        q = q.where(PingAggregate.bucket_ts >= since)
+    q = apply_range(q, PingAggregate.bucket_ts, since, until)
     rows = db.execute(q).scalars().all()
     return [
         {
@@ -163,19 +165,3 @@ async def stream(_: User = Depends(get_current_user)) -> StreamingResponse:
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-
-def _range_to_since(range: str):
-    now = utcnow()
-    mapping = {
-        "5m": timedelta(minutes=5),
-        "1h": timedelta(hours=1),
-        "6h": timedelta(hours=6),
-        "24h": timedelta(hours=24),
-        "7d": timedelta(days=7),
-        "30d": timedelta(days=30),
-    }
-    if range in mapping:
-        return now - mapping[range]
-    if range == "all":
-        return None
-    return now - timedelta(hours=1)

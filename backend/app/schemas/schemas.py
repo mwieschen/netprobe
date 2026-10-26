@@ -127,6 +127,17 @@ class PingSampleOut(ORMModel):
     ok: bool
 
 
+class PingSeriesPoint(BaseModel):
+    """Ein (ggf. gebündelter) Punkt der Dauerping-Zeitreihe."""
+
+    ts: datetime
+    count: int
+    loss: int
+    rtt_min: float | None
+    rtt_avg: float | None
+    rtt_max: float | None
+
+
 class PingStats(BaseModel):
     job_id: int
     count: int

@@ -1,17 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, PingJob, PingSample } from "../api";
+import { api, ApiError, PingJob, PingSample, PingSeriesPoint } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import { ErrorBox, Modal, RangeSelect } from "../components/common";
+import { ErrorBox, Modal } from "../components/common";
+import TimeRangePicker, { isLiveWindow, TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
 import { fmtNum } from "../util";
 
-const RANGES = [
-  { value: "5m", label: "5 Minuten" },
-  { value: "1h", label: "1 Stunde" },
-  { value: "6h", label: "6 Stunden" },
-  { value: "24h", label: "24 Stunden" },
-  { value: "7d", label: "7 Tage" },
-];
+const PRESETS = ["5m", "1h", "6h", "24h", "7d", "30d", "90d", "365d", "all"];
 
 interface Stats { count: number; loss: number; loss_pct: number; rtt_min: number | null; rtt_avg: number | null; rtt_max: number | null; }
 
@@ -19,9 +14,9 @@ export default function PingPage() {
   const { isAdmin } = useAuth();
   const [jobs, setJobs] = useState<PingJob[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
-  const [samples, setSamples] = useState<PingSample[]>([]);
+  const [points, setPoints] = useState<PingSeriesPoint[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [range, setRange] = useState("1h");
+  const [win, setWin] = useState<TimeWindow>({ range: "1h" });
   const [live, setLive] = useState<Record<number, PingSample[]>>({});
   const [showModal, setShowModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,10 +32,13 @@ export default function PingPage() {
 
   function loadSamples() {
     if (selected === null) return;
-    api.get<PingSample[]>(`/api/ping/jobs/${selected}/samples?range=${range}`).then((s) => setSamples(s.reverse()));
-    api.get<Stats>(`/api/ping/jobs/${selected}/stats?range=${range}`).then(setStats);
+    const q = windowQuery(win);
+    api.get<PingSeriesPoint[]>(`/api/ping/jobs/${selected}/series?${q}`).then(setPoints).catch(() => setPoints([]));
+    api.get<Stats>(`/api/ping/jobs/${selected}/stats?${q}`).then(setStats).catch(() => setStats(null));
+    // Live-Puffer verwerfen: die neu geladene Reihe enthält diese Werte bereits.
+    if (selected !== null) setLive((prev) => ({ ...prev, [selected]: [] }));
   }
-  useEffect(loadSamples, [selected, range]);
+  useEffect(loadSamples, [selected, win]);
 
   // Live-Updates via Server-Sent Events
   useEffect(() => {
@@ -71,13 +69,25 @@ export default function PingPage() {
     }
   }
 
-  // Kombiniere historische Samples mit Live-Daten des ausgewählten Jobs
-  const liveForSel = selected !== null ? live[selected] ?? [] : [];
-  const combined = [...samples, ...liveForSel];
-  const rttPt = combined.map((s) => [new Date(s.ts).getTime(), s.ok ? s.rtt_ms : null] as [number, number | null]);
-  const lossPt = combined
-    .filter((s) => !s.ok)
-    .map((s) => [new Date(s.ts).getTime(), 0] as [number, number | null]);
+  // Historische (ggf. gebündelte) Reihe + Live-Daten, sofern das Fenster bis "jetzt" reicht.
+  const live_ = isLiveWindow(win) && selected !== null ? live[selected] ?? [] : [];
+  const lastTs = points.length ? new Date(points[points.length - 1].ts).getTime() : 0;
+  const liveNew = live_.filter((s) => new Date(s.ts).getTime() > lastTs);
+  const bucketed = points.some((p) => p.count > 1);
+  const rttPt: [number, number | null][] = [
+    ...points.map((p) => [new Date(p.ts).getTime(), p.rtt_avg] as [number, number | null]),
+    ...liveNew.map((s) => [new Date(s.ts).getTime(), s.ok ? s.rtt_ms : null] as [number, number | null]),
+  ];
+  const rttMaxPt = points.map((p) => [new Date(p.ts).getTime(), p.rtt_max] as [number, number | null]);
+  const lossPt: [number, number | null][] = bucketed
+    ? points
+        .filter((p) => p.loss > 0)
+        .map((p) => [new Date(p.ts).getTime(), Math.round((p.loss / p.count) * 1000) / 10])
+    : [
+        ...points.filter((p) => p.loss > 0).map((p) => [new Date(p.ts).getTime(), 0] as [number, number | null]),
+        ...liveNew.filter((s) => !s.ok).map((s) => [new Date(s.ts).getTime(), 0] as [number, number | null]),
+      ];
+  const bounds = windowBounds(win);
 
   return (
     <div>
@@ -127,7 +137,7 @@ export default function PingPage() {
         <>
           <div className="topbar">
             <h2>{jobs.find((j) => j.id === selected)?.name}</h2>
-            <RangeSelect value={range} onChange={setRange} options={RANGES} />
+            <TimeRangePicker value={win} onChange={setWin} presets={PRESETS} />
           </div>
           {stats && (
             <div className="grid cols-4" style={{ marginBottom: 16 }}>
@@ -138,13 +148,30 @@ export default function PingPage() {
             </div>
           )}
           <div className="card">
-            <h2>RTT (ms) – Live</h2>
+            <h2>
+              RTT (ms){isLiveWindow(win) ? " – Live" : ""}
+              {bucketed && <span className="muted" style={{ fontSize: 13 }}> · gebündelt (ø / max je Intervall)</span>}
+            </h2>
+            {!points.length && !liveNew.length && <p className="muted">Keine Messwerte in diesem Zeitraum.</p>}
             <TimeSeriesChart
               yName="ms"
-              series={[
-                { name: "RTT", data: rttPt, color: "#38bdf8" },
-                { name: "Timeout", data: lossPt, color: "#ef4444", type: "scatter" },
-              ]}
+              y2Name={bucketed ? "Verlust %" : undefined}
+              xMin={bounds.min}
+              xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              series={
+                bucketed
+                  ? [
+                      { name: "RTT ø", data: rttPt, color: "#38bdf8" },
+                      { name: "RTT max", data: rttMaxPt, color: "#64748b" },
+                      { name: "Verlust %", data: lossPt, color: "#ef4444", type: "bar", yAxisIndex: 1 },
+                    ]
+                  : [
+                      { name: "RTT", data: rttPt, color: "#38bdf8" },
+                      { name: "Timeout", data: lossPt, color: "#ef4444", type: "scatter" },
+                    ]
+              }
             />
           </div>
         </>

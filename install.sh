@@ -3,7 +3,7 @@
 # netprobe – selbstheilender Installer/Updater für Ubuntu Server 22.04 / 24.04 / 26.04.
 #
 # Ein Befehl für alles (ohne Rückfragen):
-#   curl -sSL https://raw.githubusercontent.com/youruser/netprobe/main/install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/mwieschen/netprobe/main/install.sh | sudo bash
 #   sudo bash install.sh                  # aus Release-Paket oder Repository-Checkout
 #
 # Der Installer erkennt selbst, was zu tun ist:
@@ -21,7 +21,7 @@
 # oder Repository-Checkout), wird dieses verwendet. Per "curl | bash" wird die Quelle von
 # GitHub geladen: zuerst das neueste Release-Paket (Asset "netprobe.tar.gz", Frontend
 # vorgebaut, kein Node.js nötig), sonst das Quellarchiv des Branches (Frontend wird gebaut).
-#   NETPROBE_REPO=<owner>/<repo>   GitHub-Repository        (Default: youruser/netprobe)
+#   NETPROBE_REPO=<owner>/<repo>   GitHub-Repository        (Default: mwieschen/netprobe)
 #   NETPROBE_REF=<branch|tag|sha>  bestimmter Stand statt "neuestes Release"
 #   NETPROBE_SOURCE_URL=<url>      beliebiges tar.gz (Release-Paket oder Quellarchiv)
 #   NETPROBE_ADMIN_USER / NETPROBE_ADMIN_PASSWORD   initialer Admin (sonst Zufallspasswort)
@@ -68,7 +68,7 @@ STATE_DIR="${APP_DIR}/.install-state"
 SNAPSHOT_ROOT="${DATA_DIR}/backups"
 KEEP_SNAPSHOTS="${NETPROBE_KEEP_SNAPSHOTS:-5}"
 
-NETPROBE_REPO="${NETPROBE_REPO:-youruser/netprobe}"
+NETPROBE_REPO="${NETPROBE_REPO:-mwieschen/netprobe}"
 NETPROBE_REF="${NETPROBE_REF:-}"
 NETPROBE_SOURCE_URL="${NETPROBE_SOURCE_URL:-}"
 
@@ -1491,7 +1491,7 @@ usage() {
     cat <<'EOF'
 netprobe Installer/Updater – erkennt Neuinstallation vs. Update automatisch.
 
-  curl -sSL https://raw.githubusercontent.com/youruser/netprobe/main/install.sh | sudo bash
+  curl -sSL https://raw.githubusercontent.com/mwieschen/netprobe/main/install.sh | sudo bash
   sudo bash install.sh [optionen]
   sudo bash /opt/netprobe/install.sh [optionen]     # Update vom neuesten GitHub-Stand
 

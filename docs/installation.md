@@ -17,10 +17,10 @@ ein Update nötig ist, und arbeitet ohne Rückfragen. Updates beschreibt
 ## Ein-Befehl-Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/youruser/netprobe/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/mwieschen/netprobe/main/install.sh | sudo bash
 ```
 
-> `youruser/netprobe` ist ein Platzhalter: im Befehl **und** als Default von
+> `mwieschen/netprobe` ist ein Platzhalter: im Befehl **und** als Default von
 > `NETPROBE_REPO` in `install.sh` durch das echte Repository ersetzen.
 
 Woher die Quelle kommt:
@@ -139,7 +139,7 @@ Bei `curl | bash` Optionen nach `bash -s --` angeben: `… | sudo bash -s -- --f
 
 | Variable | Default | Bedeutung |
 |---|---|---|
-| `NETPROBE_REPO` | `youruser/netprobe` | GitHub-Repository `<owner>/<repo>` |
+| `NETPROBE_REPO` | `mwieschen/netprobe` | GitHub-Repository `<owner>/<repo>` |
 | `NETPROBE_REF` | *(leer)* | Branch, Tag oder Commit statt „neuestes Release“ (Quellarchiv → Frontend wird gebaut) |
 | `NETPROBE_SOURCE_URL` | *(leer)* | beliebige tar.gz-URL (Release-Paket oder Quellarchiv), z. B. interner Mirror |
 | `NETPROBE_ADMIN_USER` | `admin` | initialer Admin |

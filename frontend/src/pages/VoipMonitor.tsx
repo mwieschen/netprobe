@@ -9,7 +9,8 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import { Badge, ErrorBox, Modal, RangeSelect } from "../components/common";
+import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
+import { Badge, ErrorBox, Modal } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
 interface TestOptions {
@@ -19,11 +20,7 @@ interface TestOptions {
   capture_duration_s?: number;
 }
 
-const RANGES = [
-  { value: "24h", label: "24 Stunden" },
-  { value: "7d", label: "7 Tage" },
-  { value: "30d", label: "30 Tage" },
-];
+const PRESETS = ["24h", "7d", "30d", "90d", "365d", "all"];
 
 function triState(v: boolean | null): string {
   if (v === null) return "–";
@@ -35,7 +32,7 @@ export default function VoipMonitorPage() {
   const [servers, setServers] = useState<VoipServer[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [history, setHistory] = useState<VoipTest[]>([]);
-  const [range, setRange] = useState("24h");
+  const [win, setWin] = useState<TimeWindow>({ range: "24h" });
   const [showAdd, setShowAdd] = useState(false);
   const [testFor, setTestFor] = useState<VoipServer | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,16 +49,16 @@ export default function VoipMonitorPage() {
   useEffect(() => {
     if (selected === null) return;
     api
-      .get<VoipTest[]>(`/api/voip/servers/${selected}/history?range=${range}`)
+      .get<VoipTest[]>(`/api/voip/servers/${selected}/history?${windowQuery(win)}`)
       .then(setHistory)
       .catch(() => setHistory([]));
-  }, [selected, range]);
+  }, [selected, win]);
 
   function reload() {
     loadServers();
     if (selected !== null) {
       api
-        .get<VoipTest[]>(`/api/voip/servers/${selected}/history?range=${range}`)
+        .get<VoipTest[]>(`/api/voip/servers/${selected}/history?${windowQuery(win)}`)
         .then(setHistory)
         .catch(() => {});
     }
@@ -88,6 +85,7 @@ export default function VoipMonitorPage() {
     }
   }
 
+  const bounds = windowBounds(win);
   const ordered = [...history].reverse();
   const okOnly = ordered.filter((t) => t.sip_response_ms !== null || t.tls_handshake_ms !== null);
   const pt = (sel: (t: VoipTest) => number | null) =>
@@ -190,7 +188,7 @@ export default function VoipMonitorPage() {
         <>
           <div className="topbar">
             <h2>Verlauf: {selectedServer.name}</h2>
-            <RangeSelect value={range} onChange={setRange} options={RANGES} />
+            <TimeRangePicker value={win} onChange={setWin} presets={PRESETS} />
           </div>
 
           {selectedServer.last_test && <LastTestCard test={selectedServer.last_test} />}
@@ -199,6 +197,10 @@ export default function VoipMonitorPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2>Antwortzeiten (ms)</h2>
             <TimeSeriesChart
+              xMin={bounds.min}
+              xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
               yName="ms"
               series={[
                 { name: "SIP-Antwort", data: pt((t) => t.sip_response_ms), color: "#38bdf8" },
@@ -210,6 +212,10 @@ export default function VoipMonitorPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2>Paketverlust (%)</h2>
             <TimeSeriesChart
+              xMin={bounds.min}
+              xMax={bounds.max}
+              zoomKey={`${selected}|${windowQuery(win)}`}
+              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
               yName="%"
               height={220}
               series={[{ name: "Loss", data: lossPt, color: "#ef4444" }]}
@@ -235,7 +241,7 @@ export default function VoipMonitorPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((t) => (
+                  {history.slice(0, 200).map((t) => (
                     <tr key={t.id}>
                       <td>{fmtDateTime(t.ts)}</td>
                       <td>{t.source === "scheduled" ? "Zeitplan" : "manuell"}</td>
