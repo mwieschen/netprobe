@@ -17,7 +17,7 @@ def _make_ping_job() -> tuple[int, object]:
         job = PingJob(name="hist", host="192.0.2.1", interval_s=1, status="stopped")
         db.add(job)
         db.flush()
-        # Rohdaten: letzte 2 Stunden, alle 1 s (7200 Stück, > MAX_RAW_POINTS).
+        # Rohdaten: letzte 2 Stunden, alle 1 s (7200 Stück, > Rohwert-Grenze bei Standard-points).
         db.add_all(
             PingSample(job_id=job.id, ts=now - timedelta(seconds=i), ok=i % 100 != 0,
                        rtt_ms=None if i % 100 == 0 else 10.0 + (i % 7))
@@ -42,6 +42,10 @@ def test_resolve_range_presets_and_absolute():
     assert until is None and since is not None
     assert abs((utcnow() - since) - timedelta(days=7)) < timedelta(seconds=5)
     assert resolve_range("all") == (None, None)
+    new_presets = (("15m", timedelta(minutes=15)), ("3h", timedelta(hours=3)), ("12h", timedelta(hours=12)))
+    for preset, delta in new_presets:
+        since, _ = resolve_range(preset, None, None)
+        assert since is not None and abs((utcnow() - since) - delta) < timedelta(seconds=5)
     s, e = resolve_range("24h", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00+01:00")
     assert s is not None and e is not None
     assert s.isoformat() == "2026-01-01T00:00:00+00:00"
@@ -55,7 +59,7 @@ def test_resolve_range_presets_and_absolute():
 def test_ping_series_covers_full_range(admin):
     job_id, now = _make_ping_job()
 
-    # 1 h → unter MAX_RAW_POINTS → Rohwerte.
+    # 1 h → unter der Rohwert-Grenze → Rohwerte.
     pts = admin.get(f"/api/ping/jobs/{job_id}/series?range=1h").json()
     assert 3500 <= len(pts) <= 3700
     assert all(p["count"] == 1 for p in pts)
@@ -65,6 +69,10 @@ def test_ping_series_covers_full_range(admin):
     assert 0 < len(pts) <= 500
     assert sum(p["count"] for p in pts) == 7200
     assert sum(p["loss"] for p in pts) == 72
+
+    # Diagramm mit Ladepuffer (points=4500): 2 h Daten bleiben ungebündelt.
+    pts = admin.get(f"/api/ping/jobs/{job_id}/series?range=3h&points=4500").json()
+    assert len(pts) == 7200 and all(p["count"] == 1 for p in pts)
 
     # Alter Zeitraum (vor 20–30 Tagen) → nur Aggregate, absolute Start/Ende-Angabe.
     start = (now - timedelta(days=31)).isoformat()

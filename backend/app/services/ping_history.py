@@ -19,8 +19,11 @@ from sqlalchemy.orm import Session
 from app.core.timeutils import utcnow
 from app.models.ping import PingAggregate, PingSample
 
-# Bis zu so vielen Rohwerten wird ungebündelt geliefert (z. B. 1 h bei 1-s-Intervall).
-MAX_RAW_POINTS = 5000
+# Rohwerte werden ungebündelt geliefert, solange es höchstens ~3,3 × ``points`` sind
+# (Standard 1500 → 5000, z. B. 1 h bei 1-s-Intervall), absolut höchstens MAX_RAW_POINTS.
+# Die Oberfläche lädt das sichtbare Fenster plus Puffer zum Verschieben (3-fache Breite)
+# mit ``points=4500`` – so bleibt ein 1-h-Ausschnitt auch dann sekundengenau.
+MAX_RAW_POINTS = 15000
 AGGREGATE_BUCKET_S = 300
 
 
@@ -110,7 +113,7 @@ def series(
     if oldest_raw is not None and oldest_raw <= hi:
         conds = [PingSample.job_id == job_id, PingSample.ts >= max(lo, oldest_raw), PingSample.ts <= hi]
         n = db.execute(select(func.count()).select_from(PingSample).where(*conds)).scalar() or 0
-        if n <= MAX_RAW_POINTS:
+        if n <= min(MAX_RAW_POINTS, points * 10 // 3):
             for s in db.execute(select(PingSample).where(*conds).order_by(PingSample.ts)).scalars():
                 rtt = s.rtt_ms if s.ok else None
                 out.append({

@@ -331,7 +331,12 @@ sets `sampled` / `packet_count` (true count via `capinfos`).
 ### Frontend (`frontend/src/`)
 Vite + React 19 + react-router 7, ECharts used via the direct API in `components/Chart.tsx`
 and Leaflet likewise in `components/MapView.tsx` (no wrapper lib — needed for React 19;
-`MapView` loads OpenStreetMap tiles at runtime from the viewer's browser). `api.ts` is the single fetch client (`credentials:
+`MapView` loads OpenStreetMap tiles at runtime from the viewer's browser). Time-series pages share one window model
+(`components/TimeRange.tsx`): chart data is fetched with `loadQuery(win)` (visible window ± one window width
+of buffer, so the chart can be dragged/wheel-zoomed freely), stats/tables use `windowQuery(win)` / `inWindow()`
+(visible window only); `chartWindowProps(win, setWin, key)` wires axis = load range, dataZoom = window, and
+commits every pan/zoom back as an absolute window (debounced → reload). Charts on one page share a `group`
+(synced zoom + crosshair). `api.ts` is the single fetch client (`credentials:
 "include"`); `auth.tsx` holds the auth context; one page component per nav route in `pages/`.
 No test runner configured for the frontend — `npm run lint` / `npm run build` are the gates.
 

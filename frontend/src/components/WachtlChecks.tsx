@@ -15,6 +15,7 @@ import {
   WachtlSite,
 } from "../api";
 import TimeSeriesChart from "./Chart";
+import type { ChartWindowProps } from "./TimeRange";
 import { Modal } from "./common";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -244,7 +245,10 @@ export function PathPanel({ view }: { view: WachtlPathView | null }) {
   );
 }
 
-export function BandwidthPanel({ runs, bounds }: { runs: WachtlBandwidthRun[]; bounds: { min?: number; max?: number } }) {
+// chart: Zeitfenster-Props (Zoom/Verschieben); visible: Zeile im sichtbaren Fenster (ohne Ladepuffer).
+export function BandwidthPanel({ runs, chart, visible }: {
+  runs: WachtlBandwidthRun[]; chart: ChartWindowProps; visible: (ts: string) => boolean;
+}) {
   const ok = runs.filter((r) => r.mbps !== null && !r.error);
   const series = (dir: "down" | "up") =>
     ok.filter((r) => r.direction === dir).map((r) => [new Date(r.ts).getTime(), r.mbps] as [number, number | null]).reverse();
@@ -253,7 +257,7 @@ export function BandwidthPanel({ runs, bounds }: { runs: WachtlBandwidthRun[]; b
       <div className="card" style={{ marginBottom: 16 }}>
         <h2>Durchsatz (Mbit/s)</h2>
         {!runs.length && <p className="muted">Keine Messungen in diesem Zeitraum.</p>}
-        <TimeSeriesChart yName="Mbit/s" xMin={bounds.min} xMax={bounds.max} series={[
+        <TimeSeriesChart yName="Mbit/s" {...chart} series={[
           { name: "Download", data: series("down"), color: "#38bdf8", type: "line" },
           { name: "Upload", data: series("up"), color: "#a78bfa", type: "line" },
         ]} />
@@ -267,7 +271,7 @@ export function BandwidthPanel({ runs, bounds }: { runs: WachtlBandwidthRun[]; b
                 <th className="num">Jitter</th><th className="num">Verlust</th><th className="num">Retransmits</th><th>Anlass</th><th>Fehler</th></tr>
             </thead>
             <tbody>
-              {runs.slice(0, 200).map((r) => (
+              {runs.filter((r) => visible(r.ts)).slice(0, 200).map((r) => (
                 <tr key={r.id}>
                   <td>{fmtDateTime(r.ts)}</td>
                   <td>{r.direction === "down" ? "↓ Download" : "↑ Upload"}</td>
@@ -288,7 +292,9 @@ export function BandwidthPanel({ runs, bounds }: { runs: WachtlBandwidthRun[]; b
   );
 }
 
-export function RtpPanel({ runs, bounds }: { runs: WachtlRtpRun[]; bounds: { min?: number; max?: number } }) {
+export function RtpPanel({ runs, chart, visible }: {
+  runs: WachtlRtpRun[]; chart: ChartWindowProps; visible: (ts: string) => boolean;
+}) {
   const t = (r: WachtlRtpRun) => new Date(r.ts).getTime();
   const asc = [...runs].reverse();
   return (
@@ -296,7 +302,7 @@ export function RtpPanel({ runs, bounds }: { runs: WachtlRtpRun[]; bounds: { min
       <div className="card" style={{ marginBottom: 16 }}>
         <h2>Sprachqualität (MOS)</h2>
         {!runs.length && <p className="muted">Keine Sprachtests in diesem Zeitraum.</p>}
-        <TimeSeriesChart yName="MOS" y2Name="Verlust %" xMin={bounds.min} xMax={bounds.max} series={[
+        <TimeSeriesChart yName="MOS" y2Name="Verlust %" {...chart} series={[
           { name: "MOS", data: asc.map((r) => [t(r), r.mos]), color: "#22c55e" },
           { name: "Verlust %", data: asc.filter((r) => (r.loss_pct ?? 0) > 0).map((r) => [t(r), r.loss_pct]),
             color: "#ef4444", type: "bar", yAxisIndex: 1 },
@@ -311,7 +317,7 @@ export function RtpPanel({ runs, bounds }: { runs: WachtlRtpRun[]; bounds: { min
                 <th className="num">Verlust ↑/↓</th><th>Codec</th><th>Anlass</th><th>Fehler</th></tr>
             </thead>
             <tbody>
-              {runs.slice(0, 200).map((r) => (
+              {runs.filter((r) => visible(r.ts)).slice(0, 200).map((r) => (
                 <tr key={r.id}>
                   <td>{fmtDateTime(r.ts)}</td>
                   <td className="num">{fmtNum(r.mos, 2)}</td>

@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { api, ApiError, WanResult, WanTarget } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
+import TimeRangePicker, { chartWindowProps, loadQuery, TimeWindow } from "../components/TimeRange";
 import { Badge, ErrorBox, Modal } from "../components/common";
 
-const PRESETS = ["24h", "7d", "30d", "90d", "365d", "all"];
+const PRESETS = ["1h", "6h", "12h", "24h", "7d", "30d", "90d", "365d", "all"];
 
 export default function WanPage() {
   const { isAdmin } = useAuth();
@@ -26,7 +26,7 @@ export default function WanPage() {
 
   useEffect(() => {
     if (selected === null) return;
-    api.get<WanResult[]>(`/api/wan/targets/${selected}/results?${windowQuery(win)}`).then(setResults);
+    api.get<WanResult[]>(`/api/wan/targets/${selected}/results?${loadQuery(win)}`).then(setResults);
   }, [selected, win]);
 
   async function remove(id: number) {
@@ -40,14 +40,14 @@ export default function WanPage() {
     try {
       await api.post(`/api/wan/targets/${id}/run`);
       if (selected === id) {
-        api.get<WanResult[]>(`/api/wan/targets/${id}/results?${windowQuery(win)}`).then(setResults);
+        api.get<WanResult[]>(`/api/wan/targets/${id}/results?${loadQuery(win)}`).then(setResults);
       }
     } catch (err) {
       setError((err as ApiError).detail);
     }
   }
 
-  const bounds = windowBounds(win);
+  const chartWin = chartWindowProps(win, setWin, selected);
   const ordered = [...results].reverse();
   const pt = (sel: (r: WanResult) => number | null) =>
     ordered.filter((r) => r.ok).map((r) => [new Date(r.ts).getTime(), sel(r)] as [number, number | null]);
@@ -107,10 +107,8 @@ export default function WanPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2>Latenz (ms) & Jitter</h2>
             <TimeSeriesChart
-              xMin={bounds.min}
-              xMax={bounds.max}
-              zoomKey={`${selected}|${windowQuery(win)}`}
-              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              {...chartWin}
+              group="wan"
               yName="ms"
               series={[
                 { name: "RTT ø", data: pt((r) => r.rtt_avg), color: "#38bdf8" },
@@ -122,10 +120,8 @@ export default function WanPage() {
           <div className="card">
             <h2>Paketverlust (%)</h2>
             <TimeSeriesChart
-              xMin={bounds.min}
-              xMax={bounds.max}
-              zoomKey={`${selected}|${windowQuery(win)}`}
-              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              {...chartWin}
+              group="wan"
               yName="%"
               series={[{ name: "Loss", data: lossPt, color: "#ef4444", type: "line" }]}
               height={220}
