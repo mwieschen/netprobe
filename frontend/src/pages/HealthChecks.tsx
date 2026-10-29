@@ -8,11 +8,11 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
+import TimeRangePicker, { chartWindowProps, inWindow, loadQuery, TimeWindow } from "../components/TimeRange";
 import { Badge, ErrorBox, Modal } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
-const PRESETS = ["24h", "7d", "30d", "90d", "365d", "all"];
+const PRESETS = ["1h", "6h", "12h", "24h", "7d", "30d", "90d", "365d", "all"];
 
 const TYPE_LABEL: Record<HealthCheckType, string> = {
   dns: "DNS",
@@ -45,7 +45,7 @@ export default function HealthChecksPage() {
   useEffect(() => {
     if (selected === null) return;
     api
-      .get<HealthCheckResult[]>(`/api/health-checks/${selected}/history?${windowQuery(win)}`)
+      .get<HealthCheckResult[]>(`/api/health-checks/${selected}/history?${loadQuery(win)}`)
       .then(setHistory)
       .catch(() => setHistory([]));
   }, [selected, win]);
@@ -58,7 +58,7 @@ export default function HealthChecksPage() {
       load();
       if (selected === id) {
         api
-          .get<HealthCheckResult[]>(`/api/health-checks/${id}/history?${windowQuery(win)}`)
+          .get<HealthCheckResult[]>(`/api/health-checks/${id}/history?${loadQuery(win)}`)
           .then(setHistory);
       }
     } catch (err) {
@@ -95,7 +95,6 @@ export default function HealthChecksPage() {
   }, [probes]);
 
   const selectedProbe = probes.find((p) => p.id === selected) ?? null;
-  const bounds = windowBounds(win);
   const ordered = [...history].reverse();
   const rtPt = ordered.map(
     (r) => [new Date(r.ts).getTime(), r.response_ms] as [number, number | null],
@@ -221,10 +220,7 @@ export default function HealthChecksPage() {
             <div className="error-box">{selectedProbe.last_result.error}</div>
           )}
           <TimeSeriesChart
-            xMin={bounds.min}
-            xMax={bounds.max}
-            zoomKey={`${selected}|${windowQuery(win)}`}
-            onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+            {...chartWindowProps(win, setWin, selected)}
             yName="ms"
             height={220}
             series={[{ name: "Antwortzeit", data: rtPt, color: "#38bdf8" }]}
@@ -242,7 +238,7 @@ export default function HealthChecksPage() {
                 </tr>
               </thead>
               <tbody>
-                {history.slice(0, 200).map((r) => (
+                {history.filter((r) => inWindow(win, r.ts)).slice(0, 200).map((r) => (
                   <tr key={r.id}>
                     <td>{fmtDateTime(r.ts)}</td>
                     <td>{r.source === "scheduled" ? "Zeitplan" : "manuell"}</td>

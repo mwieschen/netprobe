@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, Speedtest } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
+import TimeRangePicker, { chartWindowProps, inWindow, loadQuery, TimeWindow } from "../components/TimeRange";
 import { ErrorBox } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -16,7 +16,7 @@ export default function SpeedtestPage() {
   const [error, setError] = useState<string | null>(null);
 
   function load() {
-    api.get<Speedtest[]>(`/api/speedtest/results?${windowQuery(win)}`).then(setResults).catch(() => {});
+    api.get<Speedtest[]>(`/api/speedtest/results?${loadQuery(win)}`).then(setResults).catch(() => {});
   }
 
   useEffect(load, [win]);
@@ -34,7 +34,7 @@ export default function SpeedtestPage() {
     }
   }
 
-  const bounds = windowBounds(win);
+  const chartWin = chartWindowProps(win, setWin);
   const ok = [...results].reverse().filter((r) => r.ok);
   const toPoint = (sel: (r: Speedtest) => number | null) =>
     ok.map((r) => [new Date(r.ts).getTime(), sel(r)] as [number, number | null]);
@@ -57,10 +57,8 @@ export default function SpeedtestPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <h2>Durchsatz (Mbps)</h2>
         <TimeSeriesChart
-          xMin={bounds.min}
-          xMax={bounds.max}
-          zoomKey={windowQuery(win)}
-          onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+          {...chartWin}
+          group="speedtest"
           yName="Mbps"
           series={[
             { name: "Download", data: toPoint((r) => r.download_mbps), color: "#38bdf8" },
@@ -72,10 +70,8 @@ export default function SpeedtestPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <h2>Latenz & Jitter (ms)</h2>
         <TimeSeriesChart
-          xMin={bounds.min}
-          xMax={bounds.max}
-          zoomKey={windowQuery(win)}
-          onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+          {...chartWin}
+          group="speedtest"
           yName="ms"
           series={[
             { name: "Ping", data: toPoint((r) => r.ping_ms), color: "#f59e0b" },
@@ -102,7 +98,7 @@ export default function SpeedtestPage() {
               </tr>
             </thead>
             <tbody>
-              {results.map((r) => (
+              {results.filter((r) => inWindow(win, r.ts)).map((r) => (
                 <tr key={r.id}>
                   <td>{fmtDateTime(r.ts)}</td>
                   <td>

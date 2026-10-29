@@ -20,10 +20,12 @@ import TimeSeriesChart from "../components/Chart";
 import { ErrorBox } from "../components/common";
 import { FindingList, IncidentTable, ReportTable } from "../components/WachtlEvents";
 import { BandwidthPanel, EventList, PathPanel, RtpPanel, RunNowButton } from "../components/WachtlChecks";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
+import TimeRangePicker, {
+  chartWindowProps, inWindow, loadQuery, TimeWindow, windowQuery,
+} from "../components/TimeRange";
 import { fmtDateTime, fmtNum } from "../util";
 
-const PRESETS = ["1h", "6h", "24h", "7d", "30d", "90d", "365d", "all"];
+const PRESETS = ["15m", "1h", "3h", "6h", "12h", "24h", "7d", "30d", "90d", "365d", "all"];
 
 function fmtUptime(s: number): string {
   if (!s) return "–";
@@ -90,27 +92,29 @@ export default function ClientDetailPage() {
     const base = `/api/clients/probes/${id}/checks/${check.id}`;
     const q = windowQuery(win);
     if (check.type === "ping") {
-      api.get<WachtlSeriesPoint[]>(`${base}/series?${q}`).then(setPoints).catch(() => setPoints([]));
+      api.get<WachtlSeriesPoint[]>(`${base}/series?${loadQuery(win)}&points=4500`).then(setPoints).catch(() => setPoints([]));
     } else if (check.type === "path") {
       api.get<WachtlPathView>(`${base}/path?${q}`).then(setPathView).catch(() => setPathView(null));
     } else if (check.type === "rtp") {
-      api.get<WachtlRtpRun[]>(`${base}/rtp?${q}`).then(setRtpRuns).catch(() => setRtpRuns([]));
+      api.get<WachtlRtpRun[]>(`${base}/rtp?${loadQuery(win)}`).then(setRtpRuns).catch(() => setRtpRuns([]));
     } else {
-      api.get<WachtlBandwidthRun[]>(`${base}/bandwidth?${q}`).then(setBwRuns).catch(() => setBwRuns([]));
+      api.get<WachtlBandwidthRun[]>(`${base}/bandwidth?${loadQuery(win)}`).then(setBwRuns).catch(() => setBwRuns([]));
     }
   }, [id, check, win]);
 
-  // Kennzahlen über den gewählten Zeitraum aus den (gebündelten) Punkten
-  const count = points.reduce((a, p) => a + p.count, 0);
-  const loss = points.reduce((a, p) => a + p.loss, 0);
-  const rttMins = points.map((p) => p.rtt_min).filter((v): v is number => v !== null);
-  const rttMaxs = points.map((p) => p.rtt_max).filter((v): v is number => v !== null);
-  const okWeighted = points.filter((p) => p.rtt_avg !== null && p.count > p.loss);
+  // Kennzahlen über den gewählten Zeitraum aus den (gebündelten) Punkten – ohne Ladepuffer
+  const visible = (ts: string) => inWindow(win, ts);
+  const chartWin = chartWindowProps(win, setWin, selected);
+  const shown = points.filter((p) => visible(p.ts));
+  const count = shown.reduce((a, p) => a + p.count, 0);
+  const loss = shown.reduce((a, p) => a + p.loss, 0);
+  const rttMins = shown.map((p) => p.rtt_min).filter((v): v is number => v !== null);
+  const rttMaxs = shown.map((p) => p.rtt_max).filter((v): v is number => v !== null);
+  const okWeighted = shown.filter((p) => p.rtt_avg !== null && p.count > p.loss);
   const okN = okWeighted.reduce((a, p) => a + (p.count - p.loss), 0);
   const rttAvg = okN ? okWeighted.reduce((a, p) => a + (p.rtt_avg as number) * (p.count - p.loss), 0) / okN : null;
 
   const t = (p: WachtlSeriesPoint) => new Date(p.ts).getTime();
-  const bounds = windowBounds(win);
 
   return (
     <div>
@@ -167,8 +171,8 @@ export default function ClientDetailPage() {
       {!checks.length && <p className="muted">Dieser Probe sind keine Checks zugewiesen.</p>}
 
       {check?.type === "path" && <PathPanel view={pathView} />}
-      {(check?.type === "iperf" || check?.type === "speedtest") && <BandwidthPanel runs={bwRuns} bounds={bounds} />}
-      {check?.type === "rtp" && <RtpPanel runs={rtpRuns} bounds={bounds} />}
+      {(check?.type === "iperf" || check?.type === "speedtest") && <BandwidthPanel runs={bwRuns} chart={chartWin} visible={visible} />}
+      {check?.type === "rtp" && <RtpPanel runs={rtpRuns} chart={chartWin} visible={visible} />}
 
       {check?.type === "ping" && (
         <>
@@ -188,10 +192,7 @@ export default function ClientDetailPage() {
             <TimeSeriesChart
               yName="ms"
               y2Name="Verlust %"
-              xMin={bounds.min}
-              xMax={bounds.max}
-              zoomKey={`${selected}|${windowQuery(win)}`}
-              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              {...chartWin}
               markers={reports.map((r) => ({ ts: new Date(r.occurred_at).getTime(), label: `Meldung: ${r.category_label}` }))}
               series={[
                 { name: "RTT ø", data: points.map((p) => [t(p), p.rtt_avg]), color: "#38bdf8" },

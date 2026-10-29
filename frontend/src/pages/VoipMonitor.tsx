@@ -9,7 +9,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
-import TimeRangePicker, { TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
+import TimeRangePicker, { chartWindowProps, inWindow, loadQuery, TimeWindow } from "../components/TimeRange";
 import { Badge, ErrorBox, Modal } from "../components/common";
 import { fmtDateTime, fmtNum } from "../util";
 
@@ -20,7 +20,7 @@ interface TestOptions {
   capture_duration_s?: number;
 }
 
-const PRESETS = ["24h", "7d", "30d", "90d", "365d", "all"];
+const PRESETS = ["1h", "6h", "12h", "24h", "7d", "30d", "90d", "365d", "all"];
 
 function triState(v: boolean | null): string {
   if (v === null) return "–";
@@ -49,7 +49,7 @@ export default function VoipMonitorPage() {
   useEffect(() => {
     if (selected === null) return;
     api
-      .get<VoipTest[]>(`/api/voip/servers/${selected}/history?${windowQuery(win)}`)
+      .get<VoipTest[]>(`/api/voip/servers/${selected}/history?${loadQuery(win)}`)
       .then(setHistory)
       .catch(() => setHistory([]));
   }, [selected, win]);
@@ -58,7 +58,7 @@ export default function VoipMonitorPage() {
     loadServers();
     if (selected !== null) {
       api
-        .get<VoipTest[]>(`/api/voip/servers/${selected}/history?${windowQuery(win)}`)
+        .get<VoipTest[]>(`/api/voip/servers/${selected}/history?${loadQuery(win)}`)
         .then(setHistory)
         .catch(() => {});
     }
@@ -85,7 +85,7 @@ export default function VoipMonitorPage() {
     }
   }
 
-  const bounds = windowBounds(win);
+  const chartWin = chartWindowProps(win, setWin, selected);
   const ordered = [...history].reverse();
   const okOnly = ordered.filter((t) => t.sip_response_ms !== null || t.tls_handshake_ms !== null);
   const pt = (sel: (t: VoipTest) => number | null) =>
@@ -197,10 +197,8 @@ export default function VoipMonitorPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2>Antwortzeiten (ms)</h2>
             <TimeSeriesChart
-              xMin={bounds.min}
-              xMax={bounds.max}
-              zoomKey={`${selected}|${windowQuery(win)}`}
-              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              {...chartWin}
+              group="voip"
               yName="ms"
               series={[
                 { name: "SIP-Antwort", data: pt((t) => t.sip_response_ms), color: "#38bdf8" },
@@ -212,10 +210,8 @@ export default function VoipMonitorPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <h2>Paketverlust (%)</h2>
             <TimeSeriesChart
-              xMin={bounds.min}
-              xMax={bounds.max}
-              zoomKey={`${selected}|${windowQuery(win)}`}
-              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              {...chartWin}
+              group="voip"
               yName="%"
               height={220}
               series={[{ name: "Loss", data: lossPt, color: "#ef4444" }]}
@@ -241,7 +237,7 @@ export default function VoipMonitorPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.slice(0, 200).map((t) => (
+                  {history.filter((t) => inWindow(win, t.ts)).slice(0, 200).map((t) => (
                     <tr key={t.id}>
                       <td>{fmtDateTime(t.ts)}</td>
                       <td>{t.source === "scheduled" ? "Zeitplan" : "manuell"}</td>

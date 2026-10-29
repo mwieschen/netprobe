@@ -3,10 +3,12 @@ import { api, ApiError, PingJob, PingSample, PingSeriesPoint } from "../api";
 import { useAuth } from "../auth";
 import TimeSeriesChart from "../components/Chart";
 import { ErrorBox, Modal } from "../components/common";
-import TimeRangePicker, { isLiveWindow, TimeWindow, windowBounds, windowQuery, zoomWindow } from "../components/TimeRange";
+import TimeRangePicker, {
+  chartWindowProps, isLiveWindow, loadQuery, TimeWindow, windowQuery,
+} from "../components/TimeRange";
 import { fmtNum } from "../util";
 
-const PRESETS = ["5m", "1h", "6h", "24h", "7d", "30d", "90d", "365d", "all"];
+const PRESETS = ["5m", "15m", "1h", "3h", "6h", "12h", "24h", "7d", "30d", "90d", "365d", "all"];
 
 interface Stats { count: number; loss: number; loss_pct: number; rtt_min: number | null; rtt_avg: number | null; rtt_max: number | null; }
 
@@ -32,9 +34,10 @@ export default function PingPage() {
 
   function loadSamples() {
     if (selected === null) return;
-    const q = windowQuery(win);
-    api.get<PingSeriesPoint[]>(`/api/ping/jobs/${selected}/series?${q}`).then(setPoints).catch(() => setPoints([]));
-    api.get<Stats>(`/api/ping/jobs/${selected}/stats?${q}`).then(setStats).catch(() => setStats(null));
+    // Diagramm: sichtbares Fenster + Puffer (3-fache Breite → 3-fache Punktzahl, gleiche Auflösung).
+    api.get<PingSeriesPoint[]>(`/api/ping/jobs/${selected}/series?${loadQuery(win)}&points=4500`)
+      .then(setPoints).catch(() => setPoints([]));
+    api.get<Stats>(`/api/ping/jobs/${selected}/stats?${windowQuery(win)}`).then(setStats).catch(() => setStats(null));
     // Live-Puffer verwerfen: die neu geladene Reihe enthält diese Werte bereits.
     if (selected !== null) setLive((prev) => ({ ...prev, [selected]: [] }));
   }
@@ -87,7 +90,6 @@ export default function PingPage() {
         ...points.filter((p) => p.loss > 0).map((p) => [new Date(p.ts).getTime(), 0] as [number, number | null]),
         ...liveNew.filter((s) => !s.ok).map((s) => [new Date(s.ts).getTime(), 0] as [number, number | null]),
       ];
-  const bounds = windowBounds(win);
 
   return (
     <div>
@@ -156,10 +158,7 @@ export default function PingPage() {
             <TimeSeriesChart
               yName="ms"
               y2Name={bucketed ? "Verlust %" : undefined}
-              xMin={bounds.min}
-              xMax={bounds.max}
-              zoomKey={`${selected}|${windowQuery(win)}`}
-              onZoomRange={(s, e) => setWin(zoomWindow(s, e))}
+              {...chartWindowProps(win, setWin, selected)}
               series={
                 bucketed
                   ? [

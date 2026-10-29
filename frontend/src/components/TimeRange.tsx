@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Dispatch, SetStateAction, useState } from "react";
 
 // Zeitraum-Auswahl für Verlaufsdiagramme: Presets relativ zu "jetzt" oder ein
 // absoluter Zeitraum (Start/Ende), durch den man mit ◀ / ▶ zurück- und vorblättern
@@ -22,8 +22,11 @@ const DAY = 24 * HOUR;
 
 export const RANGE_OPTIONS: Record<string, RangeOption> = {
   "5m": { value: "5m", label: "5 Minuten", ms: 5 * MIN },
+  "15m": { value: "15m", label: "15 Minuten", ms: 15 * MIN },
   "1h": { value: "1h", label: "1 Stunde", ms: HOUR },
+  "3h": { value: "3h", label: "3 Stunden", ms: 3 * HOUR },
   "6h": { value: "6h", label: "6 Stunden", ms: 6 * HOUR },
+  "12h": { value: "12h", label: "12 Stunden", ms: 12 * HOUR },
   "24h": { value: "24h", label: "24 Stunden", ms: DAY },
   "7d": { value: "7d", label: "7 Tage", ms: 7 * DAY },
   "30d": { value: "30d", label: "30 Tage", ms: 30 * DAY },
@@ -53,6 +56,33 @@ export function windowBounds(w: TimeWindow, now = Date.now()): { min?: number; m
   return ms ? { min: now - ms, max: now } : {};
 }
 
+/** Ladebereich (epoch ms): sichtbares Fenster plus je eine Fensterbreite Puffer links und
+ *  rechts (nie über "jetzt" hinaus). So lässt sich im Diagramm verschieben und herauszoomen,
+ *  ohne sofort ins Leere zu laufen; am Rand des Puffers lädt die Seite automatisch nach. */
+export function loadBounds(w: TimeWindow, now = Date.now()): { min?: number; max?: number } {
+  const b = windowBounds(w, now);
+  if (b.min === undefined || b.max === undefined) return b;
+  const span = b.max - b.min;
+  return { min: b.min - span, max: Math.min(b.max + span, now) };
+}
+
+/** Query-String für den Ladebereich (Diagrammdaten). Kennzahlen/Tabellen nutzen `windowQuery`. */
+export function loadQuery(w: TimeWindow, now = Date.now()): string {
+  const b = loadBounds(w, now);
+  if (b.min === undefined) return windowQuery(w);
+  const start = `start=${encodeURIComponent(new Date(b.min).toISOString())}`;
+  // Live-Fenster ohne Ende laden, damit auch Werte bis "jetzt" dabei sind.
+  if (isLiveWindow(w) || b.max === undefined) return start;
+  return `${start}&end=${encodeURIComponent(new Date(b.max).toISOString())}`;
+}
+
+/** Liegt der Zeitpunkt im sichtbaren Fenster? (Tabellen/Kennzahlen ohne den Ladepuffer.) */
+export function inWindow(w: TimeWindow, ts: string | number, now = Date.now()): boolean {
+  const t = typeof ts === "number" ? ts : new Date(ts).getTime();
+  const b = windowBounds(w, now);
+  return (b.min === undefined || t >= b.min) && (b.max === undefined || t <= b.max);
+}
+
 /** Endet das Fenster bei "jetzt"? (Dann ergeben Live-Daten Sinn.) */
 export function isLiveWindow(w: TimeWindow): boolean {
   return w.range !== "custom";
@@ -70,10 +100,40 @@ export function zoomWindow(start: number, end: number): TimeWindow {
   return { range: "custom", start: Math.round(start), end: Math.round(end) };
 }
 
+/** Diagramm-Props für ein Zeitfenster: Achse = Ladebereich, sichtbarer Ausschnitt = Fenster.
+ *  Verschieben/Zoomen im Diagramm übernimmt den neuen Ausschnitt als absoluten Zeitraum. */
+export function chartWindowProps(
+  w: TimeWindow,
+  setWin: Dispatch<SetStateAction<TimeWindow>>,
+  key?: string | number | null,
+) {
+  const view = windowBounds(w);
+  const load = loadBounds(w);
+  return {
+    xMin: load.min,
+    xMax: load.max,
+    viewStart: view.min,
+    viewEnd: view.max,
+    zoomKey: `${key ?? ""}|${windowQuery(w)}`,
+    onZoomRange: (s: number, e: number) =>
+      setWin((prev) => {
+        const next = zoomWindow(s, e);
+        // Gekoppelte Diagramme melden denselben Ausschnitt mehrfach – nur einmal übernehmen.
+        const same =
+          prev.range === "custom" &&
+          Math.abs((prev.start ?? 0) - (next.start ?? 0)) < 1000 &&
+          Math.abs((prev.end ?? 0) - (next.end ?? 0)) < 1000;
+        return same ? prev : next;
+      }),
+  };
+}
+
+export type ChartWindowProps = ReturnType<typeof chartWindowProps>;
+
 function toLocalInput(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 function fromLocalInput(v: string): number | null {
@@ -179,6 +239,7 @@ export default function TimeRangePicker({
         <>
           <input
             type="datetime-local"
+            step={1}
             value={value.start !== undefined ? toLocalInput(value.start) : ""}
             onChange={(e) => {
               const t = fromLocalInput(e.target.value);
@@ -188,6 +249,7 @@ export default function TimeRangePicker({
           <span className="muted">bis</span>
           <input
             type="datetime-local"
+            step={1}
             value={value.end !== undefined ? toLocalInput(value.end) : ""}
             onChange={(e) => {
               const t = fromLocalInput(e.target.value);

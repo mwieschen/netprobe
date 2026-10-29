@@ -19,8 +19,11 @@ from app.core.timeutils import utcnow
 
 RANGE_PRESETS: dict[str, timedelta] = {
     "5m": timedelta(minutes=5),
+    "15m": timedelta(minutes=15),
     "1h": timedelta(hours=1),
+    "3h": timedelta(hours=3),
     "6h": timedelta(hours=6),
+    "12h": timedelta(hours=12),
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
     "30d": timedelta(days=30),
